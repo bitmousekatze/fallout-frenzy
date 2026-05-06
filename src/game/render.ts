@@ -1,6 +1,8 @@
 import { Entity } from "./types";
 import { GameState } from "./update";
 import { TILE, WORLD_SIZE } from "./world";
+import { playerSprites } from "./sprites";
+
 
 function hsl(varName: string, alpha = 1) {
   const root = getComputedStyle(document.documentElement);
@@ -97,7 +99,7 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, playerId: number) 
       break;
     }
     case "player": {
-      drawCharacter(ctx, e, hsl("--player"), true, e.id === playerId);
+      drawPlayerSprite(ctx, e);
       break;
     }
     case "zombie": {
@@ -147,6 +149,41 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, playerId: number) 
     ctx.fillStyle = hsl("--accent");
     ctx.fillRect(x - w / 2, y - e.radius - 12, (w * e.hp) / e.maxHp, 5);
   }
+}
+
+function drawPlayerSprite(ctx: CanvasRenderingContext2D, e: Entity) {
+  const { x, y } = e.pos;
+  const facing = e.facing ?? "down";
+  const frames = playerSprites[facing];
+  const frameIdx = e.moving ? (Math.floor((e.animTime ?? 0) * 8) % 2) : 0;
+  const img = frames[frameIdx];
+
+  // Draw sprite centered on entity, scaled to ~2.4x the radius
+  const size = e.radius * 2.6;
+  if (img.complete && img.naturalWidth > 0) {
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(img, x - size / 2, y - size / 2 - 4, size, size);
+  } else {
+    // fallback while loading
+    ctx.fillStyle = hsl("--player");
+    ctx.beginPath();
+    ctx.arc(x, y, e.radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Gun overlay aimed at cursor
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(e.angle);
+  ctx.fillStyle = "#1a1a1a";
+  ctx.fillRect(e.radius - 2, -3, 22, 6);
+  if (e.muzzleFlash) {
+    ctx.fillStyle = "rgba(255,220,120,0.95)";
+    ctx.beginPath();
+    ctx.arc(e.radius + 22, 0, 8, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
 }
 
 function drawCharacter(

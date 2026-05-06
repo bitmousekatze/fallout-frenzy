@@ -26,6 +26,10 @@ export interface Entity {
   muzzleFlash?: number;
   // hit flash
   hitFlash?: number;
+  // animation
+  animTime?: number;
+  facing?: "down" | "up" | "left" | "right" | "back";
+  moving?: boolean;
 }
 
 export interface InputState {
