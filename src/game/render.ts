@@ -1,6 +1,8 @@
 import { Entity } from "./types";
 import { GameState } from "./update";
 import { TILE, WORLD_SIZE } from "./world";
+import { playerSprites } from "./sprites";
+
 
 function hsl(varName: string, alpha = 1) {
   const root = getComputedStyle(document.documentElement);

@@ -65,6 +65,20 @@ export function updateGame(state: GameState, input: InputState, dt: number) {
     player.pos.x += vx * PLAYER_SPEED * dt;
     player.pos.y += vy * PLAYER_SPEED * dt;
     player.angle = Math.atan2(input.mouseWorld.y - player.pos.y, input.mouseWorld.x - player.pos.x);
+
+    // Animation: pick facing from movement; idle keeps last facing
+    player.moving = len > 0;
+    if (player.moving) {
+      // Prefer dominant axis for clean 4-directional sprites
+      if (Math.abs(vx) > Math.abs(vy)) {
+        player.facing = vx > 0 ? "right" : "left";
+      } else {
+        player.facing = vy > 0 ? "down" : "up";
+      }
+      player.animTime = (player.animTime ?? 0) + dt;
+    } else {
+      player.animTime = 0;
+    }
   }
 
   // Clamp to world
