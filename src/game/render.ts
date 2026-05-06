@@ -151,6 +151,41 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, playerId: number) 
   }
 }
 
+function drawPlayerSprite(ctx: CanvasRenderingContext2D, e: Entity) {
+  const { x, y } = e.pos;
+  const facing = e.facing ?? "down";
+  const frames = playerSprites[facing];
+  const frameIdx = e.moving ? (Math.floor((e.animTime ?? 0) * 8) % 2) : 0;
+  const img = frames[frameIdx];
+
+  // Draw sprite centered on entity, scaled to ~2.4x the radius
+  const size = e.radius * 2.6;
+  if (img.complete && img.naturalWidth > 0) {
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(img, x - size / 2, y - size / 2 - 4, size, size);
+  } else {
+    // fallback while loading
+    ctx.fillStyle = hsl("--player");
+    ctx.beginPath();
+    ctx.arc(x, y, e.radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Gun overlay aimed at cursor
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(e.angle);
+  ctx.fillStyle = "#1a1a1a";
+  ctx.fillRect(e.radius - 2, -3, 22, 6);
+  if (e.muzzleFlash) {
+    ctx.fillStyle = "rgba(255,220,120,0.95)";
+    ctx.beginPath();
+    ctx.arc(e.radius + 22, 0, 8, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
 function drawCharacter(
   ctx: CanvasRenderingContext2D,
   e: Entity,
