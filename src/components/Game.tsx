@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { InputState } from "@/game/types";
+import { InputState, InventoryItem } from "@/game/types";
 import { GameState, updateGame } from "@/game/update";
 import { render } from "@/game/render";
 import { generateWorld } from "@/game/world";
@@ -7,6 +7,9 @@ import { generateWorld } from "@/game/world";
 export default function Game() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [showHelp, setShowHelp] = useState(true);
+  const [showInventory, setShowInventory] = useState(false);
+  const [inventoryDisplay, setInventoryDisplay] = useState<InventoryItem[]>([]);
+  const stateRef = useRef<GameState | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current!;
@@ -30,7 +33,9 @@ export default function Game() {
       fireCooldown: 0,
       kills: 0,
       shake: 0,
+      inventory: [],
     };
+    stateRef.current = state;
 
     const input: InputState = {
       up: false,
@@ -44,6 +49,17 @@ export default function Game() {
 
     const onKey = (down: boolean) => (e: KeyboardEvent) => {
       const k = e.key.toLowerCase();
+      if (k === "tab") {
+        if (down) {
+          e.preventDefault();
+          setShowInventory((prev) => {
+            const next = !prev;
+            if (next) setInventoryDisplay([...state.inventory]);
+            return next;
+          });
+        }
+        return;
+      }
       if (k === "w" || k === "arrowup") input.up = down;
       else if (k === "s" || k === "arrowdown") input.down = down;
       else if (k === "a" || k === "arrowleft") input.left = down;
@@ -56,7 +72,11 @@ export default function Game() {
           fireCooldown: 0,
           kills: 0,
           shake: 0,
+          inventory: [],
         };
+        stateRef.current = state;
+        setShowInventory(false);
+        setInventoryDisplay([]);
       }
       if (down) setShowHelp(false);
     };
@@ -111,6 +131,17 @@ export default function Game() {
     };
   }, []);
 
+  const consumeFood = (food: InventoryItem["food"]) => {
+    const s = stateRef.current;
+    if (!s) return;
+    const slot = s.inventory.find((i) => i.food === food);
+    if (!slot || slot.count <= 0) return;
+    slot.count--;
+    if (slot.count === 0) s.inventory.splice(s.inventory.indexOf(slot), 1);
+    s.player.hp = Math.min(s.player.maxHp, s.player.hp + 30);
+    setInventoryDisplay([...s.inventory]);
+  };
+
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-background">
       <canvas
@@ -124,13 +155,37 @@ export default function Game() {
         </h1>
         <p className="font-mono text-xs text-muted-foreground">v0.1 — mechanics build</p>
       </div>
-      {showHelp && (
+      {showInventory && (
+        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-md border border-border bg-card/95 px-8 py-6 font-mono text-card-foreground shadow-2xl backdrop-blur min-w-64">
+          <div className="mb-4 text-base font-bold tracking-wider text-primary text-center">INVENTORY</div>
+          {inventoryDisplay.length === 0 ? (
+            <p className="text-center text-sm text-muted-foreground">Empty</p>
+          ) : (
+            <div className="space-y-2">
+              {inventoryDisplay.map((item) => (
+                <button
+                  key={item.food}
+                  onClick={() => consumeFood(item.food)}
+                  className="flex w-full items-center justify-between rounded border border-border bg-background px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground transition-colors"
+                >
+                  <span className="capitalize">{item.food === "pork" ? "🥩 Pork" : "🥩 Beef"}</span>
+                  <span className="ml-4 text-muted-foreground">x{item.count}</span>
+                  <span className="ml-4 text-xs text-green-400">+30 HP</span>
+                </button>
+              ))}
+            </div>
+          )}
+          <p className="mt-4 text-center text-xs text-muted-foreground">TAB to close · click food to eat</p>
+        </div>
+      )}
+      {showHelp && !showInventory && (
         <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-md border border-border bg-card/90 px-6 py-5 text-center font-mono text-sm text-card-foreground shadow-2xl backdrop-blur">
           <div className="mb-2 text-base font-bold tracking-wider text-primary">CONTROLS</div>
           <div className="space-y-1 text-muted-foreground">
             <div><span className="text-foreground">WASD</span> move</div>
             <div><span className="text-foreground">Mouse</span> aim</div>
             <div><span className="text-foreground">Left click</span> shoot</div>
+            <div><span className="text-foreground">TAB</span> inventory</div>
             <div><span className="text-foreground">R</span> respawn</div>
           </div>
           <div className="mt-3 text-xs text-accent">click to begin</div>

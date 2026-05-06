@@ -1,4 +1,4 @@
-import { Entity, InputState } from "./types";
+import { Entity, InputState, InventoryItem } from "./types";
 import { WORLD_SIZE, dist, makeBullet, rand } from "./world";
 
 const PLAYER_SPEED = 240;
@@ -15,6 +15,7 @@ export interface GameState {
   fireCooldown: number;
   kills: number;
   shake: number;
+  inventory: InventoryItem[];
 }
 
 function resolveCollision(a: Entity, b: Entity) {
@@ -184,6 +185,12 @@ export function updateGame(state: GameState, input: InputState, dt: number) {
         b.hp = 0;
         if (t.hp <= 0) {
           state.kills++;
+          if (t.kind === "pig" || t.kind === "cow") {
+            const food = t.kind === "pig" ? "pork" : "beef";
+            const slot = state.inventory.find((i) => i.food === food);
+            if (slot) slot.count++;
+            else state.inventory.push({ food, count: 1 });
+          }
           // turn into corpse
           t.kind = "corpse";
           t.fadeTtl = 8;

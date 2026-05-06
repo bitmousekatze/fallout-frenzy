@@ -32,6 +32,13 @@ export interface Entity {
   moving?: boolean;
 }
 
+export type FoodType = "pork" | "beef";
+
+export interface InventoryItem {
+  food: FoodType;
+  count: number;
+}
+
 export interface InputState {
   up: boolean;
   down: boolean;
