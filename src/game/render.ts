@@ -99,7 +99,7 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, playerId: number) 
       break;
     }
     case "player": {
-      drawCharacter(ctx, e, hsl("--player"), true, e.id === playerId);
+      drawPlayerSprite(ctx, e);
       break;
     }
     case "zombie": {
