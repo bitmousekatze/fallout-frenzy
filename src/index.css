@@ -8,26 +8,45 @@ All colors MUST be HSL.
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    /* Wasteland Surviv palette */
+    --background: 75 18% 18%;
+    --foreground: 48 35% 88%;
 
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card: 80 15% 14%;
+    --card-foreground: 48 35% 88%;
 
-    --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
+    --popover: 80 15% 14%;
+    --popover-foreground: 48 35% 88%;
 
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
+    --primary: 48 45% 75%;
+    --primary-foreground: 80 25% 12%;
 
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 82 22% 28%;
+    --secondary-foreground: 48 35% 88%;
 
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
+    --muted: 82 15% 24%;
+    --muted-foreground: 48 18% 65%;
 
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    --accent: 18 65% 55%;
+    --accent-foreground: 48 35% 95%;
+
+    /* Game tokens */
+    --grass: 82 22% 42%;
+    --grass-dark: 82 25% 32%;
+    --dirt: 30 25% 35%;
+    --sand: 45 38% 68%;
+    --water: 195 45% 38%;
+    --tree: 95 30% 22%;
+    --tree-shadow: 95 35% 16%;
+    --rock: 30 8% 45%;
+    --rock-shadow: 30 10% 32%;
+    --player: 48 65% 70%;
+    --zombie: 95 35% 38%;
+    --pig: 12 45% 65%;
+    --cow: 0 0% 92%;
+    --bullet: 50 95% 65%;
+    --blood: 0 65% 35%;
+    --hud-bg: 80 25% 10%;
 
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 210 40% 98%;
