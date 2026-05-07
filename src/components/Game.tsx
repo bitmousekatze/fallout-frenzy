@@ -6,7 +6,7 @@ import { render } from "@/game/render";
 import { generateWorld, makeGrenade } from "@/game/world";
 import MobileControls from "./MobileControls";
 
-const isTouchDevice = () => navigator.maxTouchPoints > 0 || "ontouchstart" in window;
+const isTouchDevice = () => navigator.maxTouchPoints > 0 && window.matchMedia("(pointer: coarse)").matches;
 
 export default function Game() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
