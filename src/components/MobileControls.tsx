@@ -11,7 +11,8 @@ interface JoystickState {
 
 interface MobileControlsProps {
   onMove: (dx: number, dy: number) => void; // normalized -1..1
-  onShootStart: () => void;
+  onShootStart: (x: number, y: number) => void;
+  onShootMove: (x: number, y: number) => void;
   onShootEnd: () => void;
 }
 
@@ -20,7 +21,7 @@ const KNOB_RADIUS = 22;
 // Joystick zone: left 40% of screen width
 const JOYSTICK_ZONE_FRACTION = 0.4;
 
-export default function MobileControls({ onMove, onShootStart, onShootEnd }: MobileControlsProps) {
+export default function MobileControls({ onMove, onShootStart, onShootMove, onShootEnd }: MobileControlsProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const joystick = useRef<JoystickState>({ active: false, touchId: null, originX: 120, originY: 0, dx: 0, dy: 0 });
   const shootTouchId = useRef<number | null>(null);
@@ -83,7 +84,7 @@ export default function MobileControls({ onMove, onShootStart, onShootEnd }: Mob
           onMove(0, 0);
         } else if (!isLeftZone && shootTouchId.current === null) {
           shootTouchId.current = t.identifier;
-          onShootStart();
+          onShootStart(t.clientX, t.clientY);
         }
       }
     };
@@ -93,6 +94,9 @@ export default function MobileControls({ onMove, onShootStart, onShootEnd }: Mob
       const j = joystick.current;
       for (let i = 0; i < e.changedTouches.length; i++) {
         const t = e.changedTouches[i];
+        if (t.identifier === shootTouchId.current) {
+          onShootMove(t.clientX, t.clientY);
+        }
         if (t.identifier === j.touchId) {
           const rawDx = t.clientX - j.originX;
           const rawDy = t.clientY - j.originY;

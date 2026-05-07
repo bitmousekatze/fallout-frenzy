@@ -15,7 +15,7 @@ export default function Game() {
   const [inventoryDisplay, setInventoryDisplay] = useState<InventoryItem[]>([]);
   const stateRef = useRef<GameState | null>(null);
   const [isMobile] = useState(() => isTouchDevice());
-  const mobileInputRef = useRef({ dx: 0, dy: 0, shoot: false });
+  const mobileInputRef = useRef({ dx: 0, dy: 0, shoot: false, aimScreenX: 0, aimScreenY: 0 });
 
   useEffect(() => {
     const canvas = canvasRef.current!;
@@ -143,19 +143,9 @@ export default function Game() {
         input.left = mob.dx < -0.2;
         input.right = mob.dx > 0.2;
         input.shoot = mob.shoot;
-        // Auto-aim: find nearest zombie
-        let nearestDist = Infinity;
-        let nearestX = state.player.pos.x + 1;
-        let nearestY = state.player.pos.y;
-        for (const e of state.entities) {
-          if (e.kind !== "zombie" || e.hp <= 0) continue;
-          const dx = e.pos.x - state.player.pos.x;
-          const dy = e.pos.y - state.player.pos.y;
-          const d = Math.sqrt(dx * dx + dy * dy);
-          if (d < nearestDist) { nearestDist = d; nearestX = e.pos.x; nearestY = e.pos.y; }
-        }
-        input.mouseWorld.x = nearestX;
-        input.mouseWorld.y = nearestY;
+        // Aim toward where the player is pressing on the right side
+        input.mouseWorld.x = state.player.pos.x + (mob.aimScreenX - w / 2);
+        input.mouseWorld.y = state.player.pos.y + (mob.aimScreenY - h / 2);
       } else {
         // Map screen mouse to world
         input.mouseWorld.x = state.player.pos.x + (mouseScreen.x - w / 2);
@@ -163,7 +153,7 @@ export default function Game() {
       }
 
       updateGame(state, input, dt);
-      render(ctx, state, w, h);
+      render(ctx, state, w, h, isMobile);
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
@@ -184,7 +174,15 @@ export default function Game() {
     mobileInputRef.current.dy = dy;
     setShowHelp(false);
   }, []);
-  const onMobileShootStart = useCallback(() => { mobileInputRef.current.shoot = true; setShowHelp(false); }, []);
+  const onMobileShootStart = useCallback((x: number, y: number) => {
+    const m = mobileInputRef.current;
+    m.shoot = true; m.aimScreenX = x; m.aimScreenY = y;
+    setShowHelp(false);
+  }, []);
+  const onMobileShootMove = useCallback((x: number, y: number) => {
+    const m = mobileInputRef.current;
+    m.aimScreenX = x; m.aimScreenY = y;
+  }, []);
   const onMobileShootEnd = useCallback(() => { mobileInputRef.current.shoot = false; }, []);
 
   const consumeFood = (food: InventoryItem["food"]) => {
@@ -237,7 +235,7 @@ export default function Game() {
               ))}
             </div>
           )}
-          <p className="mt-4 text-center text-xs text-muted-foreground">TAB to close · click food to eat</p>
+          <p className="mt-4 text-center text-xs text-muted-foreground">{isMobile ? "🎒 button to close · tap food to eat" : "TAB to close · click food to eat"}</p>
         </div>
       )}
       {showHelp && !showInventory && (
@@ -246,8 +244,7 @@ export default function Game() {
           {isMobile ? (
             <div className="space-y-1 text-muted-foreground">
               <div><span className="text-foreground">Left joystick</span> move</div>
-              <div><span className="text-foreground">Tap right side</span> shoot</div>
-              <div><span className="text-foreground">Auto-aim</span> targets nearest zombie</div>
+              <div><span className="text-foreground">Tap &amp; hold right side</span> shoot toward tap</div>
             </div>
           ) : (
             <div className="space-y-1 text-muted-foreground">
@@ -264,9 +261,18 @@ export default function Game() {
         </div>
       )}
       {isMobile && (
+        <button
+          className="pointer-events-auto absolute right-4 bottom-4 z-20 rounded-full border border-border bg-card/90 p-4 font-mono text-xl shadow-lg backdrop-blur active:bg-accent"
+          onPointerDown={(e) => { e.preventDefault(); setShowInventory((prev) => { const next = !prev; if (next) setInventoryDisplay([...stateRef.current?.inventory ?? []]); return next; }); }}
+        >
+          🎒
+        </button>
+      )}
+      {isMobile && (
         <MobileControls
           onMove={onMobileMove}
           onShootStart={onMobileShootStart}
+          onShootMove={onMobileShootMove}
           onShootEnd={onMobileShootEnd}
         />
       )}

@@ -62,7 +62,8 @@ export function render(
   ctx: CanvasRenderingContext2D,
   state: GameState,
   viewW: number,
-  viewH: number
+  viewH: number,
+  isMobile = false
 ) {
   const { player } = state;
   const shakeX = (Math.random() - 0.5) * state.shake * 8;
@@ -142,17 +143,23 @@ export function render(
     if (roadInView(road)) drawRoad(ctx, road);
   }
 
-  // Entities — cull to viewport first, then sort only what's visible
+  // Entities — cull to viewport first, then sort only what's visible.
+  // If player is inside a building, draw that building first (below player).
   const drawList: Entity[] = [];
   for (const e of state.entities) {
-    if (inView(e.pos.x, e.pos.y, e.radius + 60)) drawList.push(e);
+    if (!inView(e.pos.x, e.pos.y, e.radius + 60)) continue;
+    if (state.insideBuilding !== null && e.id === state.insideBuilding) {
+      drawEntity(ctx, e); // draw behind everything else
+      continue;
+    }
+    drawList.push(e);
   }
   drawList.sort((a, b) => a.pos.y - b.pos.y);
   for (const e of drawList) drawEntity(ctx, e);
 
   ctx.restore();
 
-  drawHud(ctx, state, viewW, viewH);
+  drawHud(ctx, state, viewW, viewH, isMobile);
 }
 
 function drawEntity(ctx: CanvasRenderingContext2D, e: Entity) {
@@ -703,11 +710,13 @@ function drawRuinBuilding(ctx: CanvasRenderingContext2D, e: Entity) {
 
 // --- HUD ---
 
-function drawHud(ctx: CanvasRenderingContext2D, state: GameState, viewW: number, viewH: number) {
+function drawHud(ctx: CanvasRenderingContext2D, state: GameState, viewW: number, viewH: number, isMobile = false) {
   const { player } = state;
 
-  // Health bar
-  const barW = 280, barH = 18, bx = 24, by = viewH - 48;
+  // Health bar — on mobile move to top-center so it clears the joystick
+  const barW = 280, barH = 18;
+  const bx = isMobile ? (viewW - barW) / 2 : 24;
+  const by = isMobile ? 14 : viewH - 48;
   ctx.fillStyle = hsl("--hud-bg", 0.85);
   ctx.fillRect(bx - 6, by - 6, barW + 12, barH + 12);
   ctx.fillStyle = hsl("--secondary");
