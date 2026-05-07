@@ -1,9 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { InputState, InventoryItem } from "@/game/types";
 import { GameState, updateGame } from "@/game/update";
 import { render } from "@/game/render";
 import { generateWorld, makeGrenade } from "@/game/world";
+import MobileControls from "./MobileControls";
+
+const isTouchDevice = () => navigator.maxTouchPoints > 0 || "ontouchstart" in window;
 
 export default function Game() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -11,6 +14,8 @@ export default function Game() {
   const [showInventory, setShowInventory] = useState(false);
   const [inventoryDisplay, setInventoryDisplay] = useState<InventoryItem[]>([]);
   const stateRef = useRef<GameState | null>(null);
+  const [isMobile] = useState(() => isTouchDevice());
+  const mobileInputRef = useRef({ dx: 0, dy: 0, shoot: false });
 
   useEffect(() => {
     const canvas = canvasRef.current!;
@@ -130,9 +135,32 @@ export default function Game() {
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
 
-      // Map screen mouse to world
-      input.mouseWorld.x = state.player.pos.x + (mouseScreen.x - w / 2);
-      input.mouseWorld.y = state.player.pos.y + (mouseScreen.y - h / 2);
+      const mob = mobileInputRef.current;
+      if (isMobile) {
+        // Joystick drives WASD
+        input.up = mob.dy < -0.2;
+        input.down = mob.dy > 0.2;
+        input.left = mob.dx < -0.2;
+        input.right = mob.dx > 0.2;
+        input.shoot = mob.shoot;
+        // Auto-aim: find nearest zombie
+        let nearestDist = Infinity;
+        let nearestX = state.player.pos.x + 1;
+        let nearestY = state.player.pos.y;
+        for (const e of state.entities) {
+          if (e.kind !== "zombie" || e.hp <= 0) continue;
+          const dx = e.pos.x - state.player.pos.x;
+          const dy = e.pos.y - state.player.pos.y;
+          const d = Math.sqrt(dx * dx + dy * dy);
+          if (d < nearestDist) { nearestDist = d; nearestX = e.pos.x; nearestY = e.pos.y; }
+        }
+        input.mouseWorld.x = nearestX;
+        input.mouseWorld.y = nearestY;
+      } else {
+        // Map screen mouse to world
+        input.mouseWorld.x = state.player.pos.x + (mouseScreen.x - w / 2);
+        input.mouseWorld.y = state.player.pos.y + (mouseScreen.y - h / 2);
+      }
 
       updateGame(state, input, dt);
       render(ctx, state, w, h);
@@ -150,6 +178,14 @@ export default function Game() {
       window.removeEventListener("mouseup", onMouseUp);
     };
   }, []);
+
+  const onMobileMove = useCallback((dx: number, dy: number) => {
+    mobileInputRef.current.dx = dx;
+    mobileInputRef.current.dy = dy;
+    setShowHelp(false);
+  }, []);
+  const onMobileShootStart = useCallback(() => { mobileInputRef.current.shoot = true; setShowHelp(false); }, []);
+  const onMobileShootEnd = useCallback(() => { mobileInputRef.current.shoot = false; }, []);
 
   const consumeFood = (food: InventoryItem["food"]) => {
     const s = stateRef.current;
@@ -207,17 +243,32 @@ export default function Game() {
       {showHelp && !showInventory && (
         <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-md border border-border bg-card/90 px-6 py-5 text-center font-mono text-sm text-card-foreground shadow-2xl backdrop-blur">
           <div className="mb-2 text-base font-bold tracking-wider text-primary">CONTROLS</div>
-          <div className="space-y-1 text-muted-foreground">
-            <div><span className="text-foreground">WASD</span> move</div>
-            <div><span className="text-foreground">Mouse</span> aim</div>
-            <div><span className="text-foreground">Left click</span> shoot</div>
-            <div><span className="text-foreground">3</span> throw grenade</div>
-            <div><span className="text-foreground">M</span> map</div>
-            <div><span className="text-foreground">TAB</span> inventory</div>
-            <div><span className="text-foreground">R</span> respawn</div>
-          </div>
-          <div className="mt-3 text-xs text-accent">click to begin</div>
+          {isMobile ? (
+            <div className="space-y-1 text-muted-foreground">
+              <div><span className="text-foreground">Left joystick</span> move</div>
+              <div><span className="text-foreground">Tap right side</span> shoot</div>
+              <div><span className="text-foreground">Auto-aim</span> targets nearest zombie</div>
+            </div>
+          ) : (
+            <div className="space-y-1 text-muted-foreground">
+              <div><span className="text-foreground">WASD</span> move</div>
+              <div><span className="text-foreground">Mouse</span> aim</div>
+              <div><span className="text-foreground">Left click</span> shoot</div>
+              <div><span className="text-foreground">3</span> throw grenade</div>
+              <div><span className="text-foreground">M</span> map</div>
+              <div><span className="text-foreground">TAB</span> inventory</div>
+              <div><span className="text-foreground">R</span> respawn</div>
+            </div>
+          )}
+          <div className="mt-3 text-xs text-accent">{isMobile ? "tap to begin" : "click to begin"}</div>
         </div>
+      )}
+      {isMobile && (
+        <MobileControls
+          onMove={onMobileMove}
+          onShootStart={onMobileShootStart}
+          onShootEnd={onMobileShootEnd}
+        />
       )}
     </div>
   );
