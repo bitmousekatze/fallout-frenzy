@@ -1,5 +1,35 @@
-import { Entity, InputState, InventoryItem } from "./types";
-import { WORLD_SIZE, dist, makeBullet, rand } from "./world";
+import { Entity, InputState, InventoryItem, Road, RuinArea } from "./types";
+import { SPAWN_POINT, SPAWN_SAFE_RADIUS, WORLD_SIZE, dist, makeBullet, makeExplosion, makeZombie, rand } from "./world";
+
+// --- Spatial grid for O(n) broad-phase collision (Option A) ---
+const GRID_CELL = 256;
+const _grid = new Map<number, Entity[]>();
+const _candidateBuf: Entity[] = [];
+
+function _gridKey(gx: number, gy: number): number {
+  return (gx & 0x7fff) | ((gy & 0x7fff) << 15);
+}
+function _gridInsert(e: Entity) {
+  const k = _gridKey(Math.floor(e.pos.x / GRID_CELL), Math.floor(e.pos.y / GRID_CELL));
+  let cell = _grid.get(k);
+  if (!cell) { cell = []; _grid.set(k, cell); }
+  cell.push(e);
+}
+function _gridCandidates(e: Entity): Entity[] {
+  _candidateBuf.length = 0;
+  const gx = Math.floor(e.pos.x / GRID_CELL);
+  const gy = Math.floor(e.pos.y / GRID_CELL);
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      const cell = _grid.get(_gridKey(gx + dx, gy + dy));
+      if (cell) for (const c of cell) _candidateBuf.push(c);
+    }
+  }
+  return _candidateBuf;
+}
+
+// Physics only runs for entities within this radius of the player (Option B)
+const PHYSICS_RADIUS = 900;
 
 const PLAYER_SPEED = 240;
 const ZOMBIE_SPEED = 95;
@@ -9,6 +39,9 @@ const ZOMBIE_DAMAGE = 8;
 const ANIMAL_SPEED = 60;
 const FIRE_RATE = 0.12; // seconds
 
+const RUIN_SPAWN_INTERVAL = 10;  // seconds between ruin spawns
+const GLOBAL_SPAWN_INTERVAL = 20; // seconds between roaming spawns
+
 export interface GameState {
   entities: Entity[];
   player: Entity;
@@ -16,6 +49,12 @@ export interface GameState {
   kills: number;
   shake: number;
   inventory: InventoryItem[];
+  ruinAreas: RuinArea[];
+  roads: Road[];
+  ruinSpawnTimers: number[];   // countdown per ruin area
+  globalSpawnTimer: number;
+  insideBuilding: number | null; // entity id of building player is currently inside
+  showLargeMap: boolean;
 }
 
 function resolveCollision(a: Entity, b: Entity) {
@@ -27,8 +66,8 @@ function resolveCollision(a: Entity, b: Entity) {
     const nx = dx / d;
     const ny = dy / d;
     // trees/rocks are immovable
-    const aStatic = a.kind === "tree" || a.kind === "rock";
-    const bStatic = b.kind === "tree" || b.kind === "rock";
+    const aStatic = a.kind === "tree" || a.kind === "rock" || a.kind === "ruin" || a.kind === "car";
+    const bStatic = b.kind === "tree" || b.kind === "rock" || b.kind === "ruin" || b.kind === "car";
     if (aStatic && bStatic) return;
     if (aStatic) {
       b.pos.x -= nx * overlap;
@@ -42,6 +81,72 @@ function resolveCollision(a: Entity, b: Entity) {
       b.pos.x -= (nx * overlap) / 2;
       b.pos.y -= (ny * overlap) / 2;
     }
+  }
+}
+
+function ruinLocalPos(player: Entity, ruin: Entity) {
+  const dx = player.pos.x - ruin.pos.x;
+  const dy = player.pos.y - ruin.pos.y;
+  const cos = Math.cos(-ruin.angle), sin = Math.sin(-ruin.angle);
+  return { lx: dx * cos - dy * sin, ly: dx * sin + dy * cos };
+}
+
+function isInsideBuildingRect(player: Entity, ruin: Entity): boolean {
+  const w = ruin.ruinW ?? 120, h = ruin.ruinH ?? 100;
+  const { lx, ly } = ruinLocalPos(player, ruin);
+  return Math.abs(lx) < w / 2 - 4 && Math.abs(ly) < h / 2 - 4;
+}
+
+// AABB push-out for player approaching a ruin from outside.
+// Uses rectangle math so corners can't be clipped into.
+// The south face is open at the door zone (|lx| < doorHW).
+function resolvePlayerVsRuinExterior(player: Entity, ruin: Entity) {
+  const w = ruin.ruinW ?? 120, h = ruin.ruinH ?? 100;
+  const doorHW = w * 0.20;
+  const r = player.radius;
+  const { lx, ly } = ruinLocalPos(player, ruin);
+  const hw = w / 2, hh = h / 2;
+
+  const ox = hw + r - Math.abs(lx);
+  const oy = hh + r - Math.abs(ly);
+  if (ox <= 0 || oy <= 0) return; // no overlap
+
+  let nlx = lx, nly = ly;
+  if (ox < oy) {
+    // least penetration is horizontal — push sideways
+    nlx = lx > 0 ? lx + ox : lx - ox;
+  } else {
+    // least penetration is vertical
+    if (ly > 0 && Math.abs(lx) < doorHW) return; // south door open — let player enter
+    nly = ly > 0 ? ly + oy : ly - oy;
+  }
+
+  const cos = Math.cos(ruin.angle), sin = Math.sin(ruin.angle);
+  player.pos.x = ruin.pos.x + nlx * cos - nly * sin;
+  player.pos.y = ruin.pos.y + nlx * sin + nly * cos;
+}
+
+function constrainPlayerInsideBuilding(player: Entity, ruin: Entity) {
+  const w = ruin.ruinW ?? 120, h = ruin.ruinH ?? 100;
+  const doorHW = w * 0.20;
+  const r = player.radius;
+  const { lx, ly } = ruinLocalPos(player, ruin);
+  const hw = w / 2, hh = h / 2;
+
+  let nlx = lx, nly = ly;
+  // South wall — open at door zone
+  if (ly > hh - r && Math.abs(lx) >= doorHW) nly = hh - r;
+  // North wall — solid
+  if (ly < -hh + r) nly = -hh + r;
+  // East wall — solid
+  if (lx > hw - r) nlx = hw - r;
+  // West wall — solid
+  if (lx < -hw + r) nlx = -hw + r;
+
+  if (nlx !== lx || nly !== ly) {
+    const cos = Math.cos(ruin.angle), sin = Math.sin(ruin.angle);
+    player.pos.x = ruin.pos.x + nlx * cos - nly * sin;
+    player.pos.y = ruin.pos.y + nlx * sin + nly * cos;
   }
 }
 
@@ -86,6 +191,15 @@ export function updateGame(state: GameState, input: InputState, dt: number) {
   player.pos.x = Math.max(player.radius, Math.min(WORLD_SIZE - player.radius, player.pos.x));
   player.pos.y = Math.max(player.radius, Math.min(WORLD_SIZE - player.radius, player.pos.y));
 
+  // Track which building the player is inside and scale radius 20% smaller indoors
+  let _inBuilding: number | null = null;
+  for (const e of state.entities) {
+    if (e.kind !== "ruin" || e.hp <= 0) continue;
+    if (isInsideBuildingRect(player, e)) { _inBuilding = e.id; break; }
+  }
+  state.insideBuilding = _inBuilding;
+  player.radius = _inBuilding ? 16 : 20;
+
   // Shooting
   state.fireCooldown = Math.max(0, state.fireCooldown - dt);
   if (input.shoot && state.fireCooldown <= 0 && player.hp > 0) {
@@ -110,6 +224,8 @@ export function updateGame(state: GameState, input: InputState, dt: number) {
     }
     if (e.kind === "zombie" && e.hp > 0) {
       const d = dist(e.pos, player.pos);
+      // D: skip AI entirely for zombies well outside aggro + buffer — imperceptible at that range
+      if (d > 1200) continue;
       if (d < ZOMBIE_AGGRO && player.hp > 0) {
         e.state = "chase";
         const ang = Math.atan2(player.pos.y - e.pos.y, player.pos.x - e.pos.x);
@@ -169,6 +285,73 @@ export function updateGame(state: GameState, input: InputState, dt: number) {
     }
   }
 
+  // Grenades — move toward target, count down fuse, explode
+  for (const e of state.entities) {
+    if (e.kind !== "grenade" || e.hp <= 0) continue;
+    e.fuseTimer = (e.fuseTimer ?? 4) - dt;
+
+    // Slow down as grenade nears its target
+    if (e.throwTarget) {
+      const dx = e.throwTarget.x - e.pos.x;
+      const dy = e.throwTarget.y - e.pos.y;
+      const d = Math.hypot(dx, dy);
+      if (d < 10) {
+        e.vel.x = 0;
+        e.vel.y = 0;
+      } else {
+        const decel = Math.min(1, d / 80);
+        e.vel.x *= 1 - dt * 4 * (1 - decel);
+        e.vel.y *= 1 - dt * 4 * (1 - decel);
+      }
+    }
+    e.pos.x += e.vel.x * dt;
+    e.pos.y += e.vel.y * dt;
+
+    // Explode on impact with solids or world boundary
+    const hitWall = e.pos.x <= e.radius || e.pos.x >= WORLD_SIZE - e.radius ||
+                    e.pos.y <= e.radius || e.pos.y >= WORLD_SIZE - e.radius;
+    const hitSolid = !hitWall && state.entities.some(t =>
+      t !== e && t.hp > 0 &&
+      (t.kind === "zombie" || t.kind === "pig" || t.kind === "cow" || t.kind === "tree" || t.kind === "rock" || t.kind === "ruin" || t.kind === "car") &&
+      dist(e.pos, t.pos) < e.radius + t.radius
+    );
+
+    if (e.fuseTimer <= 0 || hitWall || hitSolid) {
+      e.hp = 0;
+      const EXPLOSION_RADIUS = 120;
+      const EXPLOSION_DAMAGE = 80;
+      state.entities.push(makeExplosion(e.pos));
+      state.shake = Math.min(3, state.shake + 2.5);
+      for (const t of state.entities) {
+        if (t === e || t.hp <= 0) continue;
+        if (t.kind === "player") continue; // player is immune
+        if (t.kind === "bullet" || t.kind === "corpse" || t.kind === "tree" || t.kind === "rock" || t.kind === "ruin" || t.kind === "car" || t.kind === "explosion") continue;
+        const d = dist(e.pos, t.pos);
+        if (d < EXPLOSION_RADIUS + t.radius) {
+          const dmg = EXPLOSION_DAMAGE * Math.max(0, 1 - d / EXPLOSION_RADIUS);
+          t.hp -= dmg;
+          t.hitFlash = 0.12;
+          if (t.hp <= 0) {
+            state.kills++;
+            if (t.kind === "pig" || t.kind === "cow") {
+              const food = t.kind === "pig" ? "pork" : "beef";
+              const slot = state.inventory.find(i => i.food === food);
+              if (slot) slot.count++; else state.inventory.push({ food, count: 1 });
+            }
+            t.kind = "corpse";
+            t.fadeTtl = 8;
+            t.radius = Math.max(8, t.radius - 4);
+          }
+        }
+      }
+    }
+  }
+
+  // Explosions — tick down
+  for (const e of state.entities) {
+    if (e.kind === "explosion") e.ttl = (e.ttl ?? 0) - dt;
+  }
+
   // Bullet collisions
   for (const b of state.entities) {
     if (b.kind !== "bullet" || b.hp <= 0) continue;
@@ -176,7 +359,7 @@ export function updateGame(state: GameState, input: InputState, dt: number) {
       if (t.id === b.ownerId || t.hp <= 0) continue;
       if (t.kind === "bullet" || t.kind === "corpse") continue;
       if (dist(b.pos, t.pos) < b.radius + t.radius) {
-        if (t.kind === "tree" || t.kind === "rock") {
+        if (t.kind === "tree" || t.kind === "rock" || t.kind === "ruin" || t.kind === "car") {
           b.hp = 0;
           break;
         }
@@ -201,13 +384,33 @@ export function updateGame(state: GameState, input: InputState, dt: number) {
     }
   }
 
-  // Entity-entity collisions (simple O(n^2), fine for sandbox counts)
+  // Entity-entity collisions — spatial grid broad-phase (A) + player-proximity cull (B)
   const solids = state.entities.filter(
-    (e) => e.hp > 0 && (e.kind === "player" || e.kind === "zombie" || e.kind === "pig" || e.kind === "cow" || e.kind === "tree" || e.kind === "rock")
+    (e) => e.hp > 0 &&
+    (e.kind === "player" || e.kind === "zombie" || e.kind === "pig" || e.kind === "cow" || e.kind === "tree" || e.kind === "rock" || e.kind === "ruin" || e.kind === "car") &&
+    (e.kind === "player" || dist(e.pos, player.pos) < PHYSICS_RADIUS)
   );
-  for (let i = 0; i < solids.length; i++) {
-    for (let j = i + 1; j < solids.length; j++) {
-      resolveCollision(solids[i], solids[j]);
+  _grid.clear();
+  for (const e of solids) _gridInsert(e);
+  for (const a of solids) {
+    const candidates = _gridCandidates(a);
+    for (const b of candidates) {
+      if (b.id <= a.id) continue; // each pair exactly once
+      // handled separately with door awareness below
+      if ((a.kind === "player" && b.kind === "ruin") || (a.kind === "ruin" && b.kind === "player")) continue;
+      resolveCollision(a, b);
+    }
+  }
+
+  // Player vs ruin buildings: allow entry through door gap, enforce walls from inside
+  if (player.hp > 0) {
+    for (const e of state.entities) {
+      if (e.kind !== "ruin" || e.hp <= 0) continue;
+      if (state.insideBuilding === e.id) {
+        constrainPlayerInsideBuilding(player, e);
+      } else {
+        resolvePlayerVsRuinExterior(player, e);
+      }
     }
   }
 
@@ -218,10 +421,56 @@ export function updateGame(state: GameState, input: InputState, dt: number) {
     }
   }
 
+  // Ruin zombie respawns — only when cleared, every 10s
+  if (player.hp > 0) {
+    for (let i = 0; i < state.ruinAreas.length; i++) {
+      const ra = state.ruinAreas[i];
+      state.ruinSpawnTimers[i] = (state.ruinSpawnTimers[i] ?? RUIN_SPAWN_INTERVAL) - dt;
+
+      if (state.ruinSpawnTimers[i] <= 0) {
+        state.ruinSpawnTimers[i] = RUIN_SPAWN_INTERVAL;
+
+        // Only spawn if ruin is cleared (no living zombies inside radius)
+        const livingInRuin = state.entities.some(
+          e => e.kind === "zombie" && e.hp > 0 && dist(e.pos, { x: ra.cx, y: ra.cy }) < ra.radius + 100
+        );
+        if (!livingInRuin) {
+          const count = Math.random() < 0.20 ? 10 : 5;
+          for (let z = 0; z < count; z++) {
+            const angle = rand(0, Math.PI * 2);
+            const r = rand(60, ra.radius);
+            const pos = { x: ra.cx + Math.cos(angle) * r, y: ra.cy + Math.sin(angle) * r };
+            // never spawn inside the safe zone
+            if (dist(pos, SPAWN_POINT) < SPAWN_SAFE_RADIUS) continue;
+            state.entities.push(makeZombie(pos));
+          }
+        }
+      }
+    }
+
+    // Global constant spawn — roaming zombie somewhere on the map
+    state.globalSpawnTimer = (state.globalSpawnTimer ?? GLOBAL_SPAWN_INTERVAL) - dt;
+    if (state.globalSpawnTimer <= 0) {
+      state.globalSpawnTimer = GLOBAL_SPAWN_INTERVAL;
+      let pos: { x: number; y: number } | null = null;
+      for (let attempt = 0; attempt < 20; attempt++) {
+        const p = { x: rand(100, WORLD_SIZE - 100), y: rand(100, WORLD_SIZE - 100) };
+        // keep away from safe zone and not right on top of the player
+        if (dist(p, SPAWN_POINT) < SPAWN_SAFE_RADIUS) continue;
+        if (dist(p, player.pos) < 300) continue;
+        pos = p;
+        break;
+      }
+      if (pos) state.entities.push(makeZombie(pos));
+    }
+  }
+
   // Cleanup
   state.entities = state.entities.filter((e) => {
     if (e.kind === "bullet") return e.hp > 0;
     if (e.kind === "corpse") return (e.fadeTtl ?? 0) > 0;
+    if (e.kind === "grenade") return e.hp > 0;
+    if (e.kind === "explosion") return (e.ttl ?? 0) > 0;
     return true;
   });
 }

@@ -1,6 +1,27 @@
 export type Vec2 = { x: number; y: number };
 
-export type EntityKind = "player" | "zombie" | "pig" | "cow" | "tree" | "rock" | "bullet" | "corpse";
+export type EntityKind = "player" | "zombie" | "pig" | "cow" | "tree" | "rock" | "bullet" | "corpse" | "ruin" | "car" | "grenade" | "explosion";
+
+export interface RuinArea {
+  cx: number;
+  cy: number;
+  radius: number;
+  name: string;
+}
+
+export interface Road {
+  ax: number;
+  ay: number;
+  bx: number;
+  by: number;
+  // quadratic bezier control point — gives roads a slight curve
+  cx: number;
+  cy: number;
+  // per-road RNG seed so detail patterns are stable each frame
+  seed: number;
+  // broken gap segments as [tStart, tEnd] pairs along the bezier (0–1)
+  gaps: Array<[number, number]>;
+}
 
 export interface Entity {
   id: number;
@@ -30,6 +51,39 @@ export interface Entity {
   animTime?: number;
   facing?: "down" | "up" | "left" | "right" | "back";
   moving?: boolean;
+  // ruin building variant (0-3)
+  ruinVariant?: number;
+  ruinW?: number;
+  ruinH?: number;
+  // car
+  carVariant?: number;
+  // grenade
+  fuseTimer?: number;
+  throwTarget?: Vec2;
+}
+
+export interface TownBuilding {
+  x: number;
+  y: number;
+  variant: number;
+  angle: number;
+}
+
+export interface TownRoad {
+  ax: number; ay: number;
+  bx: number; by: number;
+  cx: number; cy: number; // quadratic bezier control point
+}
+
+export interface TownTemplate {
+  id: string;
+  name: string;
+  buildings: TownBuilding[];
+  rubble: Array<{ x: number; y: number }>;
+  roads: TownRoad[];
+  // Points where world-level roads connect into this town (relative to town center)
+  roadEndpoints: Array<{ x: number; y: number }>;
+  createdAt: number;
 }
 
 export type FoodType = "pork" | "beef";

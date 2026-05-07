@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { InputState, InventoryItem } from "@/game/types";
 import { GameState, updateGame } from "@/game/update";
 import { render } from "@/game/render";
-import { generateWorld } from "@/game/world";
+import { generateWorld, makeGrenade } from "@/game/world";
 
 export default function Game() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -34,6 +35,12 @@ export default function Game() {
       kills: 0,
       shake: 0,
       inventory: [],
+      ruinAreas: init.ruinAreas,
+      roads: init.roads,
+      ruinSpawnTimers: init.ruinAreas.map(() => 10),
+      globalSpawnTimer: 20,
+      insideBuilding: null,
+      showLargeMap: false,
     };
     stateRef.current = state;
 
@@ -64,6 +71,13 @@ export default function Game() {
       else if (k === "s" || k === "arrowdown") input.down = down;
       else if (k === "a" || k === "arrowleft") input.left = down;
       else if (k === "d" || k === "arrowright") input.right = down;
+      else if (k === " ") { e.preventDefault(); input.shoot = down; }
+      else if (down && k === "3" && state.player.hp > 0) {
+        state.entities.push(makeGrenade({ ...state.player.pos }, { ...input.mouseWorld }));
+      }
+      else if (down && k === "m") {
+        state.showLargeMap = !state.showLargeMap;
+      }
       else if (down && k === "r" && state.player.hp <= 0) {
         const fresh = generateWorld();
         state = {
@@ -73,6 +87,12 @@ export default function Game() {
           kills: 0,
           shake: 0,
           inventory: [],
+          ruinAreas: fresh.ruinAreas,
+          roads: fresh.roads,
+          ruinSpawnTimers: fresh.ruinAreas.map(() => 10),
+          globalSpawnTimer: 20,
+          insideBuilding: null,
+          showLargeMap: false,
         };
         stateRef.current = state;
         setShowInventory(false);
@@ -155,6 +175,12 @@ export default function Game() {
         </h1>
         <p className="font-mono text-xs text-muted-foreground">v0.1 — mechanics build</p>
       </div>
+      <Link
+        to="/town-builder"
+        className="pointer-events-auto absolute right-4 top-4 font-mono text-xs text-muted-foreground hover:text-primary border border-border bg-card/80 px-3 py-1.5 rounded backdrop-blur"
+      >
+        Town Builder
+      </Link>
       {showInventory && (
         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-md border border-border bg-card/95 px-8 py-6 font-mono text-card-foreground shadow-2xl backdrop-blur min-w-64">
           <div className="mb-4 text-base font-bold tracking-wider text-primary text-center">INVENTORY</div>
@@ -185,6 +211,8 @@ export default function Game() {
             <div><span className="text-foreground">WASD</span> move</div>
             <div><span className="text-foreground">Mouse</span> aim</div>
             <div><span className="text-foreground">Left click</span> shoot</div>
+            <div><span className="text-foreground">3</span> throw grenade</div>
+            <div><span className="text-foreground">M</span> map</div>
             <div><span className="text-foreground">TAB</span> inventory</div>
             <div><span className="text-foreground">R</span> respawn</div>
           </div>
