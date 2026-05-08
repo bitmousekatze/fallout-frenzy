@@ -30,31 +30,31 @@ export default function Game() {
   const wsSendTimerRef = useRef(0);
   const prevKillsRef = useRef(0);
 
-  // Supabase Realtime relay
+  // Supabase Realtime — Presence for player positions
   useEffect(() => {
     const myId = myIdRef.current;
-    const channel = supabase.channel(CHANNEL, {
-      config: { broadcast: { self: false, ack: false } },
-    });
+    const channel = supabase.channel(CHANNEL);
     channelRef.current = channel;
 
     channel
-      .on("broadcast", { event: "pos" }, ({ payload }) => {
-        if (!payload?.id || payload.id === myId) return;
-        if (payload.type === "leave") {
-          remotePlayersRef.current.delete(payload.id);
-        } else {
-          remotePlayersRef.current.set(payload.id, payload as RemotePlayer);
+      .on("presence", { event: "sync" }, () => {
+        const state = channel.presenceState<RemotePlayer>();
+        const newMap = new Map<string, RemotePlayer>();
+        for (const [key, presences] of Object.entries(state)) {
+          if (key === myId) continue;
+          const p = (presences as RemotePlayer[])[0];
+          if (p) newMap.set(key, p);
         }
+        remotePlayersRef.current = newMap;
       })
-      .subscribe((status) => {
+      .subscribe(async (status) => {
         console.log("[FF] Realtime status:", status);
+        if (status === "SUBSCRIBED") {
+          await channel.track({ id: myId, name, avatar, x: 0, y: 0, angle: 0, facing: "down", moving: false, animTime: 0 });
+        }
       });
 
-    return () => {
-      channel.send({ type: "broadcast", event: "pos", payload: { id: myId, type: "leave" } });
-      supabase.removeChannel(channel);
-    };
+    return () => { supabase.removeChannel(channel); };
   }, []);
 
   useEffect(() => {
@@ -211,24 +211,20 @@ export default function Game() {
       }
       prevKillsRef.current = state.kills;
 
-      // Broadcast own state at ~10fps
+      // Track own position via Presence at ~10fps
       wsSendTimerRef.current -= dt;
       if (wsSendTimerRef.current <= 0 && channelRef.current) {
         wsSendTimerRef.current = 0.1;
-        channelRef.current.send({
-          type: "broadcast",
-          event: "pos",
-          payload: {
-            id: myIdRef.current,
-            name,
-            avatar,
-            x: state.player.pos.x,
-            y: state.player.pos.y,
-            angle: state.player.angle,
-            facing: state.player.facing ?? "down",
-            moving: state.player.moving ?? false,
-            animTime: state.player.animTime ?? 0,
-          },
+        channelRef.current.track({
+          id: myIdRef.current,
+          name,
+          avatar,
+          x: state.player.pos.x,
+          y: state.player.pos.y,
+          angle: state.player.angle,
+          facing: state.player.facing ?? "down",
+          moving: state.player.moving ?? false,
+          animTime: state.player.animTime ?? 0,
         });
       }
 
