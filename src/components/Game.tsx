@@ -5,8 +5,11 @@ import { GameState, updateGame } from "@/game/update";
 import { render } from "@/game/render";
 import { generateWorld, makeGrenade } from "@/game/world";
 import MobileControls from "./MobileControls";
+import { supabase } from "@/lib/supabase";
+import { randomUUID } from "@/lib/uuid";
 
 const KILLS_KEY = "ff-total-kills";
+const CHANNEL = "fallout-frenzy";
 
 const isTouchDevice = () => navigator.maxTouchPoints > 0 && window.matchMedia("(pointer: coarse)").matches;
 
@@ -22,30 +25,35 @@ export default function Game() {
   const [isMobile] = useState(() => isTouchDevice());
   const mobileInputRef = useRef({ dx: 0, dy: 0, shoot: false, aimScreenX: 0, aimScreenY: 0 });
   const remotePlayersRef = useRef<Map<string, RemotePlayer>>(new Map());
-  const wsRef = useRef<WebSocket | null>(null);
-  const myIdRef = useRef("");
+  const myIdRef = useRef(randomUUID());
+  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const wsSendTimerRef = useRef(0);
   const prevKillsRef = useRef(0);
 
-  // WebSocket relay connection
+  // Supabase Realtime relay
   useEffect(() => {
-    const wsUrl = import.meta.env.VITE_WS_URL ?? `ws://${location.hostname}:3001`;
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-    ws.onmessage = (e) => {
-      try {
-        const msg = JSON.parse(e.data as string);
-        if (msg.type === "init") {
-          myIdRef.current = msg.id;
-        } else if (msg.type === "update") {
-          remotePlayersRef.current.set(msg.id, msg as RemotePlayer);
-        } else if (msg.type === "leave") {
-          remotePlayersRef.current.delete(msg.id);
+    const myId = myIdRef.current;
+    const channel = supabase.channel(CHANNEL, { config: { presence: { key: myId } } });
+    channelRef.current = channel;
+
+    channel
+      .on("broadcast", { event: "pos" }, ({ payload }) => {
+        if (payload.id === myId) return;
+        if (payload.type === "leave") {
+          remotePlayersRef.current.delete(payload.id);
+        } else {
+          remotePlayersRef.current.set(payload.id, payload as RemotePlayer);
         }
-      } catch { /* ignore malformed */ }
+      })
+      .on("presence", { event: "leave" }, ({ leftPresences }) => {
+        for (const p of leftPresences) remotePlayersRef.current.delete(p.key ?? "");
+      })
+      .subscribe();
+
+    return () => {
+      channel.send({ type: "broadcast", event: "pos", payload: { id: myId, type: "leave" } });
+      supabase.removeChannel(channel);
     };
-    ws.onerror = () => { /* server not running — silent fallback */ };
-    return () => ws.close();
   }, []);
 
   useEffect(() => {
@@ -202,22 +210,25 @@ export default function Game() {
       }
       prevKillsRef.current = state.kills;
 
-      // WS: broadcast own state at ~10fps
+      // Broadcast own state at ~10fps
       wsSendTimerRef.current -= dt;
-      if (wsSendTimerRef.current <= 0 && wsRef.current?.readyState === WebSocket.OPEN && myIdRef.current) {
+      if (wsSendTimerRef.current <= 0 && channelRef.current) {
         wsSendTimerRef.current = 0.1;
-        wsRef.current.send(JSON.stringify({
-          type: "update",
-          id: myIdRef.current,
-          name,
-          avatar,
-          x: state.player.pos.x,
-          y: state.player.pos.y,
-          angle: state.player.angle,
-          facing: state.player.facing ?? "down",
-          moving: state.player.moving ?? false,
-          animTime: state.player.animTime ?? 0,
-        }));
+        channelRef.current.send({
+          type: "broadcast",
+          event: "pos",
+          payload: {
+            id: myIdRef.current,
+            name,
+            avatar,
+            x: state.player.pos.x,
+            y: state.player.pos.y,
+            angle: state.player.angle,
+            facing: state.player.facing ?? "down",
+            moving: state.player.moving ?? false,
+            animTime: state.player.animTime ?? 0,
+          },
+        });
       }
 
       render(ctx, state, w, h, isMobile, remotePlayersRef.current);
