@@ -6,15 +6,17 @@ import { render } from "@/game/render";
 import { generateWorld, makeGrenade } from "@/game/world";
 import MobileControls from "./MobileControls";
 import { randomUUID } from "@/lib/uuid";
+import { type Account, updateAccount } from "@/lib/accounts";
 
-const KILLS_KEY = "ff-total-kills";
 const WS_URL = import.meta.env.VITE_WS_URL ?? "ws://localhost:3001";
 
 const isTouchDevice = () => navigator.maxTouchPoints > 0 && window.matchMedia("(pointer: coarse)").matches;
 
 export default function Game() {
   const location = useLocation();
-  const { name = "Unknown", avatar = "cat" as AvatarKind } = (location.state ?? {}) as { name: string; avatar: AvatarKind };
+  const { account = null, avatar = "cat" as AvatarKind } = (location.state ?? {}) as { account: Account | null; avatar: AvatarKind };
+  const name = account?.displayName ?? "Unknown";
+  const accountRef = useRef<Account | null>(account);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [showHelp, setShowHelp] = useState(true);
@@ -85,6 +87,8 @@ export default function Game() {
       player: init.player,
       fireCooldown: 0,
       kills: 0,
+      money: account?.money ?? 0,
+      displayName: account?.displayName ?? "Survivor",
       shake: 0,
       inventory: [],
       ruinAreas: init.ruinAreas,
@@ -143,6 +147,8 @@ export default function Game() {
           player: fresh.player,
           fireCooldown: 0,
           kills: 0,
+          money: state.money,
+          displayName: state.displayName,
           shake: 0,
           inventory: [],
           ruinAreas: fresh.ruinAreas,
@@ -209,13 +215,18 @@ export default function Game() {
 
       updateGame(state, input, dt);
 
-      // Kill tracking — persist to localStorage
+      // Persist kills + money to account on each new kill
       if (state.kills > prevKillsRef.current) {
-        const diff = state.kills - prevKillsRef.current;
-        const total = parseInt(localStorage.getItem(KILLS_KEY) ?? "0") + diff;
-        localStorage.setItem(KILLS_KEY, String(total));
+        prevKillsRef.current = state.kills;
+        if (accountRef.current) {
+          accountRef.current = {
+            ...accountRef.current,
+            kills: (account?.kills ?? 0) + state.kills,
+            money: state.money,
+          };
+          updateAccount(accountRef.current);
+        }
       }
-      prevKillsRef.current = state.kills;
 
       // Send input to authoritative server at ~20fps
       wsSendTimerRef.current -= dt;

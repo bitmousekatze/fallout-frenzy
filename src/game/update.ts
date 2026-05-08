@@ -52,6 +52,8 @@ export interface GameState {
   player: Entity;
   fireCooldown: number;
   kills: number;
+  money: number;
+  displayName: string;
   shake: number;
   inventory: InventoryItem[];
   ruinAreas: RuinArea[];
@@ -443,6 +445,7 @@ export function updateGame(state: GameState, input: InputState, dt: number) {
           t.hitFlash = 0.12;
           if (t.hp <= 0) {
             state.kills++;
+            if (t.kind === "zombie") state.money += 5 + Math.floor(Math.random() * 11);
             if (t.kind === "pig" || t.kind === "cow") {
               const food = t.kind === "pig" ? "pork" : "beef";
               const slot = state.inventory.find(i => i.food === food);
@@ -478,6 +481,7 @@ export function updateGame(state: GameState, input: InputState, dt: number) {
         b.hp = 0;
         if (t.hp <= 0) {
           state.kills++;
+          if (t.kind === "zombie") state.money += 5 + Math.floor(Math.random() * 11);
           if (t.kind === "pig" || t.kind === "cow") {
             const food = t.kind === "pig" ? "pork" : "beef";
             const slot = state.inventory.find((i) => i.food === food);

@@ -791,21 +791,26 @@ function drawHud(ctx: CanvasRenderingContext2D, state: GameState, viewW: number,
   ctx.textBaseline = "middle";
   ctx.fillText(`HP ${Math.ceil(player.hp)} / ${player.maxHp}`, bx + 10, by + barH / 2);
 
-  // Kills + coords + online count
+  // Stats panel — displayName, kills, money, coords, online
   ctx.fillStyle = hsl("--hud-bg", 0.85);
-  ctx.fillRect(viewW - 200, 16, 184, 72);
+  ctx.fillRect(viewW - 200, 16, 184, 100);
   ctx.fillStyle = hsl("--foreground");
-  ctx.font = "bold 14px ui-sans-serif, system-ui";
+  ctx.font = "bold 13px ui-sans-serif, system-ui";
   ctx.textBaseline = "top";
-  ctx.fillText(`Kills: ${state.kills}`, viewW - 188, 26);
-  ctx.font = "12px ui-sans-serif, system-ui";
+  ctx.fillText(state.displayName || "Survivor", viewW - 188, 22);
+  ctx.font = "bold 12px ui-sans-serif, system-ui";
+  ctx.fillStyle = hsl("--foreground");
+  ctx.fillText(`Kills: ${state.kills}`, viewW - 188, 40);
+  ctx.fillStyle = "rgba(250,200,80,0.95)";
+  ctx.fillText(`Caps: $${state.money}`, viewW - 188, 56);
+  ctx.font = "11px ui-sans-serif, system-ui";
   ctx.fillStyle = hsl("--muted-foreground");
   ctx.fillText(
     `X ${Math.round(player.pos.x - SPAWN_POINT.x)}  Y ${Math.round(player.pos.y - SPAWN_POINT.y)}`,
-    viewW - 188, 48
+    viewW - 188, 74
   );
   ctx.fillStyle = onlineCount > 0 ? "rgba(100,220,100,0.9)" : "rgba(180,180,180,0.6)";
-  ctx.fillText(`● ${onlineCount + 1} online`, viewW - 188, 64);
+  ctx.fillText(`● ${onlineCount + 1} online`, viewW - 188, 90);
 
   // Minimap
   const mmSize = 180;
