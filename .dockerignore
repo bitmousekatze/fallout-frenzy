@@ -1,0 +1,56 @@
+# flyctl launch added from .gitignore
+**/.env.local
+
+# Logs
+**/logs
+**/*.log
+**/npm-debug.log*
+**/yarn-debug.log*
+**/yarn-error.log*
+**/pnpm-debug.log*
+**/lerna-debug.log*
+
+**/node_modules
+**/dist
+**/dist-ssr
+**/*.local
+
+# Editor directories and files
+**/.vscode/*
+!**/.vscode/extensions.json
+**/.idea
+**/.DS_Store
+**/*.suo
+**/*.ntvs*
+**/*.njsproj
+**/*.sln
+**/*.sw?
+
+**/CLAUDE.md
+
+# flyctl launch added from node_modules/.cache/gh-pages/https!github.com!bitmousekatze!fallout-frenzy.git/.gitignore
+# Logs
+node_modules/.cache/gh-pages/https!github.com!bitmousekatze!fallout-frenzy.git/**/logs
+node_modules/.cache/gh-pages/https!github.com!bitmousekatze!fallout-frenzy.git/**/*.log
+node_modules/.cache/gh-pages/https!github.com!bitmousekatze!fallout-frenzy.git/**/npm-debug.log*
+node_modules/.cache/gh-pages/https!github.com!bitmousekatze!fallout-frenzy.git/**/yarn-debug.log*
+node_modules/.cache/gh-pages/https!github.com!bitmousekatze!fallout-frenzy.git/**/yarn-error.log*
+node_modules/.cache/gh-pages/https!github.com!bitmousekatze!fallout-frenzy.git/**/pnpm-debug.log*
+node_modules/.cache/gh-pages/https!github.com!bitmousekatze!fallout-frenzy.git/**/lerna-debug.log*
+
+node_modules/.cache/gh-pages/https!github.com!bitmousekatze!fallout-frenzy.git/**/node_modules
+node_modules/.cache/gh-pages/https!github.com!bitmousekatze!fallout-frenzy.git/**/dist
+node_modules/.cache/gh-pages/https!github.com!bitmousekatze!fallout-frenzy.git/**/dist-ssr
+node_modules/.cache/gh-pages/https!github.com!bitmousekatze!fallout-frenzy.git/**/*.local
+
+# Editor directories and files
+node_modules/.cache/gh-pages/https!github.com!bitmousekatze!fallout-frenzy.git/**/.vscode/*
+!node_modules/.cache/gh-pages/https!github.com!bitmousekatze!fallout-frenzy.git/**/.vscode/extensions.json
+node_modules/.cache/gh-pages/https!github.com!bitmousekatze!fallout-frenzy.git/**/.idea
+node_modules/.cache/gh-pages/https!github.com!bitmousekatze!fallout-frenzy.git/**/.DS_Store
+node_modules/.cache/gh-pages/https!github.com!bitmousekatze!fallout-frenzy.git/**/*.suo
+node_modules/.cache/gh-pages/https!github.com!bitmousekatze!fallout-frenzy.git/**/*.ntvs*
+node_modules/.cache/gh-pages/https!github.com!bitmousekatze!fallout-frenzy.git/**/*.njsproj
+node_modules/.cache/gh-pages/https!github.com!bitmousekatze!fallout-frenzy.git/**/*.sln
+node_modules/.cache/gh-pages/https!github.com!bitmousekatze!fallout-frenzy.git/**/*.sw?
+fly.toml
