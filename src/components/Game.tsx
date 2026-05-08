@@ -5,11 +5,10 @@ import { GameState, updateGame } from "@/game/update";
 import { render } from "@/game/render";
 import { generateWorld, makeGrenade } from "@/game/world";
 import MobileControls from "./MobileControls";
-import { supabase } from "@/lib/supabase";
 import { randomUUID } from "@/lib/uuid";
 
 const KILLS_KEY = "ff-total-kills";
-const CHANNEL = "fallout-frenzy";
+const WS_URL = import.meta.env.VITE_WS_URL ?? "ws://localhost:3001";
 
 const isTouchDevice = () => navigator.maxTouchPoints > 0 && window.matchMedia("(pointer: coarse)").matches;
 
@@ -25,36 +24,43 @@ export default function Game() {
   const [isMobile] = useState(() => isTouchDevice());
   const mobileInputRef = useRef({ dx: 0, dy: 0, shoot: false, aimScreenX: 0, aimScreenY: 0 });
   const remotePlayersRef = useRef<Map<string, RemotePlayer>>(new Map());
-  const myIdRef = useRef(randomUUID());
-  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const myIdRef = useRef<string | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
   const wsSendTimerRef = useRef(0);
   const prevKillsRef = useRef(0);
 
-  // Supabase Realtime — Presence for player positions
+  // WebSocket — authoritative server connection
   useEffect(() => {
-    const myId = myIdRef.current;
-    const channel = supabase.channel(CHANNEL);
-    channelRef.current = channel;
+    const ws = new WebSocket(WS_URL);
+    wsRef.current = ws;
 
-    channel
-      .on("presence", { event: "sync" }, () => {
-        const state = channel.presenceState<RemotePlayer>();
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: "join", name, avatar }));
+      console.log("[FF] Connected to game server");
+    };
+
+    ws.onmessage = (e) => {
+      let msg: { type: string; id?: string; tick?: number; players?: RemotePlayer[] };
+      try { msg = JSON.parse(e.data); } catch { return; }
+
+      if (msg.type === "init" && msg.id) {
+        myIdRef.current = msg.id;
+      } else if (msg.type === "snapshot" && msg.players) {
+        const myId = myIdRef.current;
         const newMap = new Map<string, RemotePlayer>();
-        for (const [key, presences] of Object.entries(state)) {
-          if (key === myId) continue;
-          const p = (presences as RemotePlayer[])[0];
-          if (p) newMap.set(key, p);
+        for (const p of msg.players) {
+          if (p.id !== myId) newMap.set(p.id, p);
         }
         remotePlayersRef.current = newMap;
-      })
-      .subscribe(async (status) => {
-        console.log("[FF] Realtime status:", status);
-        if (status === "SUBSCRIBED") {
-          await channel.track({ id: myId, name, avatar, x: 0, y: 0, angle: 0, facing: "down", moving: false, animTime: 0 });
-        }
-      });
+      } else if (msg.type === "leave" && msg.id) {
+        remotePlayersRef.current.delete(msg.id);
+      }
+    };
 
-    return () => { supabase.removeChannel(channel); };
+    ws.onclose = () => console.log("[FF] Disconnected from game server");
+    ws.onerror = () => console.warn("[FF] Game server unreachable — solo mode");
+
+    return () => ws.close();
   }, []);
 
   useEffect(() => {
@@ -211,21 +217,19 @@ export default function Game() {
       }
       prevKillsRef.current = state.kills;
 
-      // Track own position via Presence at ~10fps
+      // Send input to authoritative server at ~20fps
       wsSendTimerRef.current -= dt;
-      if (wsSendTimerRef.current <= 0 && channelRef.current) {
-        wsSendTimerRef.current = 0.1;
-        channelRef.current.track({
-          id: myIdRef.current,
-          name,
-          avatar,
-          x: state.player.pos.x,
-          y: state.player.pos.y,
+      if (wsSendTimerRef.current <= 0 && wsRef.current?.readyState === WebSocket.OPEN) {
+        wsSendTimerRef.current = 0.05;
+        wsRef.current.send(JSON.stringify({
+          type: "input",
+          up: input.up,
+          down: input.down,
+          left: input.left,
+          right: input.right,
           angle: state.player.angle,
           facing: state.player.facing ?? "down",
-          moving: state.player.moving ?? false,
-          animTime: state.player.animTime ?? 0,
-        });
+        }));
       }
 
       render(ctx, state, w, h, isMobile, remotePlayersRef.current);
