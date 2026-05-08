@@ -233,8 +233,9 @@ export function updateGame(state: GameState, input: InputState, dt: number) {
       vx /= len;
       vy /= len;
     }
-    player.pos.x += vx * PLAYER_SPEED * dt;
-    player.pos.y += vy * PLAYER_SPEED * dt;
+    const speed = PLAYER_SPEED * (input.sprint ? 1.6 : 1);
+    player.pos.x += vx * speed * dt;
+    player.pos.y += vy * speed * dt;
     player.angle = Math.atan2(input.mouseWorld.y - player.pos.y, input.mouseWorld.x - player.pos.x);
 
     // Animation: pick facing from movement; idle keeps last facing
@@ -352,29 +353,6 @@ export function updateGame(state: GameState, input: InputState, dt: number) {
       }
     }
 
-    if (e.kind === "doggo") {
-      const DOGGO_SPEED = 200;
-      const FOLLOW_DIST = 60;  // stop this close to player
-      const CATCH_UP_DIST = 400; // run faster when far behind
-      const dx = player.pos.x - e.pos.x;
-      const dy = player.pos.y - e.pos.y;
-      const d = Math.hypot(dx, dy) || 1;
-      if (d > FOLLOW_DIST) {
-        const speed = d > CATCH_UP_DIST ? DOGGO_SPEED * 1.6 : DOGGO_SPEED;
-        e.pos.x += (dx / d) * speed * dt;
-        e.pos.y += (dy / d) * speed * dt;
-        e.moving = true;
-        e.animTime = (e.animTime ?? 0) + dt;
-        if (Math.abs(dx) > Math.abs(dy)) {
-          e.facing = dx > 0 ? "right" : "left";
-        } else {
-          e.facing = dy > 0 ? "down" : "up";
-        }
-      } else {
-        e.moving = false;
-        e.animTime = 0;
-      }
-    }
 
     if ((e.kind === "pig" || e.kind === "cow") && e.hp > 0) {
       // peaceful wander
@@ -567,7 +545,7 @@ export function updateGame(state: GameState, input: InputState, dt: number) {
           e => e.kind === "zombie" && e.hp > 0 && dist(e.pos, { x: ra.cx, y: ra.cy }) < ra.radius + 100
         );
         if (!livingInRuin) {
-          const count = Math.random() < 0.20 ? 10 : 5;
+          const count = Math.random() < 0.20 ? 15 : 8;
           for (let z = 0; z < count; z++) {
             const angle = rand(0, Math.PI * 2);
             const r = rand(60, ra.radius);

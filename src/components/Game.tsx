@@ -1,14 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
-import { InputState, InventoryItem } from "@/game/types";
+import { Link, useLocation } from "react-router-dom";
+import { AvatarKind, InputState, InventoryItem, RemotePlayer } from "@/game/types";
 import { GameState, updateGame } from "@/game/update";
 import { render } from "@/game/render";
 import { generateWorld, makeGrenade } from "@/game/world";
 import MobileControls from "./MobileControls";
 
+const KILLS_KEY = "ff-total-kills";
+
 const isTouchDevice = () => navigator.maxTouchPoints > 0 && window.matchMedia("(pointer: coarse)").matches;
 
 export default function Game() {
+  const location = useLocation();
+  const { name = "Unknown", avatar = "cat" as AvatarKind } = (location.state ?? {}) as { name: string; avatar: AvatarKind };
+
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [showHelp, setShowHelp] = useState(true);
   const [showInventory, setShowInventory] = useState(false);
@@ -16,6 +21,32 @@ export default function Game() {
   const stateRef = useRef<GameState | null>(null);
   const [isMobile] = useState(() => isTouchDevice());
   const mobileInputRef = useRef({ dx: 0, dy: 0, shoot: false, aimScreenX: 0, aimScreenY: 0 });
+  const remotePlayersRef = useRef<Map<string, RemotePlayer>>(new Map());
+  const wsRef = useRef<WebSocket | null>(null);
+  const myIdRef = useRef("");
+  const wsSendTimerRef = useRef(0);
+  const prevKillsRef = useRef(0);
+
+  // WebSocket relay connection
+  useEffect(() => {
+    const wsUrl = import.meta.env.VITE_WS_URL ?? `ws://${location.hostname}:3001`;
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
+    ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data as string);
+        if (msg.type === "init") {
+          myIdRef.current = msg.id;
+        } else if (msg.type === "update") {
+          remotePlayersRef.current.set(msg.id, msg as RemotePlayer);
+        } else if (msg.type === "leave") {
+          remotePlayersRef.current.delete(msg.id);
+        }
+      } catch { /* ignore malformed */ }
+    };
+    ws.onerror = () => { /* server not running — silent fallback */ };
+    return () => ws.close();
+  }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current!;
@@ -33,6 +64,7 @@ export default function Game() {
     window.addEventListener("resize", resize);
 
     const init = generateWorld();
+    init.player.avatar = avatar;
     let state: GameState = {
       entities: init.entities,
       player: init.player,
@@ -57,6 +89,7 @@ export default function Game() {
       left: false,
       right: false,
       shoot: false,
+      sprint: false,
       mouseWorld: { x: 0, y: 0 },
     };
     const mouseScreen = { x: 0, y: 0 };
@@ -79,6 +112,7 @@ export default function Game() {
       else if (k === "a" || k === "arrowleft") input.left = down;
       else if (k === "d" || k === "arrowright") input.right = down;
       else if (k === " ") { e.preventDefault(); input.shoot = down; }
+      else if (e.key === "Shift") input.sprint = down;
       else if (down && k === "3" && state.player.hp > 0) {
         state.entities.push(makeGrenade({ ...state.player.pos }, { ...input.mouseWorld }));
       }
@@ -87,6 +121,8 @@ export default function Game() {
       }
       else if (down && k === "r" && state.player.hp <= 0) {
         const fresh = generateWorld();
+        fresh.player.avatar = avatar;
+        prevKillsRef.current = 0;
         state = {
           entities: fresh.entities,
           player: fresh.player,
@@ -157,7 +193,34 @@ export default function Game() {
       }
 
       updateGame(state, input, dt);
-      render(ctx, state, w, h, isMobile);
+
+      // Kill tracking — persist to localStorage
+      if (state.kills > prevKillsRef.current) {
+        const diff = state.kills - prevKillsRef.current;
+        const total = parseInt(localStorage.getItem(KILLS_KEY) ?? "0") + diff;
+        localStorage.setItem(KILLS_KEY, String(total));
+      }
+      prevKillsRef.current = state.kills;
+
+      // WS: broadcast own state at ~10fps
+      wsSendTimerRef.current -= dt;
+      if (wsSendTimerRef.current <= 0 && wsRef.current?.readyState === WebSocket.OPEN && myIdRef.current) {
+        wsSendTimerRef.current = 0.1;
+        wsRef.current.send(JSON.stringify({
+          type: "update",
+          id: myIdRef.current,
+          name,
+          avatar,
+          x: state.player.pos.x,
+          y: state.player.pos.y,
+          angle: state.player.angle,
+          facing: state.player.facing ?? "down",
+          moving: state.player.moving ?? false,
+          animTime: state.player.animTime ?? 0,
+        }));
+      }
+
+      render(ctx, state, w, h, isMobile, remotePlayersRef.current);
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
@@ -253,6 +316,7 @@ export default function Game() {
           ) : (
             <div className="space-y-1 text-muted-foreground">
               <div><span className="text-foreground">WASD</span> move</div>
+              <div><span className="text-foreground">Shift</span> sprint</div>
               <div><span className="text-foreground">Mouse</span> aim</div>
               <div><span className="text-foreground">Left click</span> shoot</div>
               <div><span className="text-foreground">3</span> throw grenade</div>

@@ -61,6 +61,8 @@ export interface Entity {
   // grenade
   fuseTimer?: number;
   throwTarget?: Vec2;
+  // avatar choice (player only)
+  avatar?: AvatarKind;
 }
 
 export interface TownBuilding {
@@ -95,6 +97,8 @@ export interface ChunkData {
 
 export type FoodType = "pork" | "beef";
 
+export type AvatarKind = "cat" | "doggo";
+
 export interface InventoryItem {
   food: FoodType;
   count: number;
@@ -106,5 +110,18 @@ export interface InputState {
   left: boolean;
   right: boolean;
   shoot: boolean;
+  sprint: boolean;
   mouseWorld: Vec2;
+}
+
+export interface RemotePlayer {
+  id: string;
+  name: string;
+  avatar: AvatarKind;
+  x: number;
+  y: number;
+  angle: number;
+  facing: "down" | "up" | "left" | "right" | "back";
+  moving: boolean;
+  animTime: number;
 }

@@ -628,9 +628,6 @@ export function generateWorld() {
     });
   }
 
-  // Friendly doggo NPC wanders around spawn
-  entities.push(makeDoggo());
-
   // ruinAreas starts empty — chunks populate it as the player explores
   return { entities, player, ruinAreas: [] as RuinArea[], roads };
 }

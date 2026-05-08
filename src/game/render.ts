@@ -1,4 +1,4 @@
-import { Entity, Road } from "./types";
+import { Entity, RemotePlayer, Road } from "./types";
 import { GameState } from "./update";
 import { SAFE_ZONE_HALF, SPAWN_POINT, TILE, WORLD_SIZE } from "./world";
 import { doggoSprites, playerSprites } from "./sprites";
@@ -63,7 +63,8 @@ export function render(
   state: GameState,
   viewW: number,
   viewH: number,
-  isMobile = false
+  isMobile = false,
+  remotePlayers: Map<string, RemotePlayer> = new Map()
 ) {
   const { player } = state;
   const shakeX = (Math.random() - 0.5) * state.shake * 8;
@@ -157,6 +158,32 @@ export function render(
   drawList.sort((a, b) => a.pos.y - b.pos.y);
   for (const e of drawList) drawEntity(ctx, e);
 
+  // Remote players
+  for (const rp of remotePlayers.values()) {
+    if (!inView(rp.x, rp.y, 40)) continue;
+    const fake = {
+      id: -1, kind: "player" as const,
+      pos: { x: rp.x, y: rp.y }, vel: { x: 0, y: 0 },
+      radius: 20, angle: rp.angle, hp: 1, maxHp: 1,
+      facing: rp.facing, moving: rp.moving, animTime: rp.animTime,
+      avatar: rp.avatar,
+    } as Entity;
+    ctx.fillStyle = "rgba(0,0,0,0.25)";
+    ctx.beginPath();
+    ctx.ellipse(rp.x, rp.y + 12, 19, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+    if (rp.avatar === "doggo") drawDoggo(ctx, fake);
+    else drawPlayerSprite(ctx, fake);
+    ctx.save();
+    ctx.font = "bold 11px monospace";
+    ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.fillText(rp.name, rp.x + 1, rp.y - 30 + 1);
+    ctx.fillStyle = "#fff";
+    ctx.fillText(rp.name, rp.x, rp.y - 30);
+    ctx.restore();
+  }
+
   ctx.restore();
 
   drawHud(ctx, state, viewW, viewH, isMobile);
@@ -201,7 +228,11 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity) {
     }
     case "ruin":  { drawRuinBuilding(ctx, e); break; }
     case "car":   { drawCar(ctx, e); break; }
-    case "player": { drawPlayerSprite(ctx, e); break; }
+    case "player": {
+      if (e.avatar === "doggo") drawDoggo(ctx, e);
+      else drawPlayerSprite(ctx, e);
+      break;
+    }
     case "doggo":  { drawDoggo(ctx, e); break; }
     case "zombie": {
       const flash = e.hitFlash ? "#fff" : hsl("--zombie");
@@ -326,6 +357,18 @@ function drawDoggo(ctx: CanvasRenderingContext2D, e: Entity) {
     ctx.arc(x, y, e.radius, 0, Math.PI * 2);
     ctx.fill();
   }
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(e.angle);
+  ctx.fillStyle = "#1a1a1a";
+  ctx.fillRect(e.radius - 2, -3, 22, 6);
+  if (e.muzzleFlash) {
+    ctx.fillStyle = "rgba(255,220,120,0.95)";
+    ctx.beginPath();
+    ctx.arc(e.radius + 22, 0, 8, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
 }
 
 function drawCharacter(ctx: CanvasRenderingContext2D, e: Entity, color: string) {
