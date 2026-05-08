@@ -1,7 +1,7 @@
 import { Entity, Road } from "./types";
 import { GameState } from "./update";
 import { SAFE_ZONE_HALF, SPAWN_POINT, TILE, WORLD_SIZE } from "./world";
-import { playerSprites } from "./sprites";
+import { doggoSprites, playerSprites } from "./sprites";
 
 // --- CSS variable cache: resolve once, never query the DOM again ---
 const _hslCache = new Map<string, string>();
@@ -53,7 +53,7 @@ function getRuinCanvas(e: Entity): OffscreenCanvas {
   oc = new OffscreenCanvas(diag, diag);
   const cx = oc.getContext("2d")!;
   cx.translate(diag / 2, diag / 2);
-  _drawRuinBuildingShape(cx, w, h, e.ruinVariant ?? 0);
+  _drawRuinBuildingShape(cx, w, h, e.ruinVariant ?? 0, e.twoDoors ?? false);
   _ruinCanvasCache.set(e.id, oc);
   return oc;
 }
@@ -202,6 +202,7 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity) {
     case "ruin":  { drawRuinBuilding(ctx, e); break; }
     case "car":   { drawCar(ctx, e); break; }
     case "player": { drawPlayerSprite(ctx, e); break; }
+    case "doggo":  { drawDoggo(ctx, e); break; }
     case "zombie": {
       const flash = e.hitFlash ? "#fff" : hsl("--zombie");
       drawCharacter(ctx, e, flash);
@@ -305,6 +306,26 @@ function drawPlayerSprite(ctx: CanvasRenderingContext2D, e: Entity) {
     ctx.fill();
   }
   ctx.restore();
+}
+
+function drawDoggo(ctx: CanvasRenderingContext2D, e: Entity) {
+  const { x, y } = e.pos;
+  const f = e.facing;
+  const facing: "down" | "up" | "left" | "right" =
+    f === "up" || f === "left" || f === "right" ? f : "down";
+  const frames = doggoSprites[facing];
+  const frameIdx = Math.floor(Math.abs(e.animTime ?? 0) * 8) % 2;
+  const img = frames[frameIdx];
+  const size = e.radius * 3.2;
+  if (img.complete && img.naturalWidth > 0) {
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(img, x - size / 2, y - size / 2 - 4, size, size);
+  } else {
+    ctx.fillStyle = "#c8a96e";
+    ctx.beginPath();
+    ctx.arc(x, y, e.radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
 }
 
 function drawCharacter(ctx: CanvasRenderingContext2D, e: Entity, color: string) {
@@ -540,7 +561,7 @@ function _hole(ctx: Ctx2D, x: number, y: number, rx: number, ry: number) {
   ctx.beginPath(); ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2); ctx.fill();
 }
 
-function _drawRuinBuildingShape(ctx: Ctx2D, w: number, h: number, v: number) {
+function _drawRuinBuildingShape(ctx: Ctx2D, w: number, h: number, v: number, twoDoors = false) {
   const [wall, wallHi, floor, void_, rubble] = _ruinPalette[v % _ruinPalette.length];
   const T = Math.round(Math.max(8, w * 0.075)); // wall thickness
   const hx = w / 2, hy = h / 2;
@@ -616,76 +637,74 @@ function _drawRuinBuildingShape(ctx: Ctx2D, w: number, h: number, v: number) {
     ctx.fillStyle = wall; _fr(ctx, x, y, ww, wh);
     ctx.fillStyle = wallHi; _fr(ctx, x, y, ww, 3); // top-edge highlight
   }
-  // South wall with centered door gap — matches isInDoorZone doorHW
+  // South wall with centered door gap
   function wallS(thick: number) {
     wallRect(-hx, hy - thick, hx - doorHW, thick);
     wallRect(doorHW, hy - thick, hx - doorHW, thick);
   }
+  // North wall with centered door gap (mirrors wallS)
+  function wallN(thick: number) {
+    wallRect(-hx, -hy, hx - doorHW, thick);
+    wallRect(doorHW, -hy, hx - doorHW, thick);
+  }
 
   if (v === 0) {
-    // House: N/E/W full, S with center door
-    wallRect(-hx, -hy, w, T);                                // N
     wallRect(hx - T, -hy, T, h);                             // E
     wallRect(-hx, -hy, T, h);                                // W
+    twoDoors ? wallN(T) : wallRect(-hx, -hy, w, T);          // N
     wallS(T);                                                 // S door
     ctx.fillStyle = floor; _fr(ctx, hx - T, -hy, T, T + 8); // crumbled NE corner
   } else if (v === 1) {
-    // Shop: N with storefront gap, E full, W partial, S with center door
+    // Shop: always has storefront gap on N — treated as second opening when twoDoors
     wallRect(-hx, -hy, w * 0.28, T);                         // N left
     wallRect(hx - T - w * 0.25, -hy, w * 0.25 + T, T);      // N right
     wallRect(hx - T, -hy, T, h);                             // E
     wallRect(-hx, -hy, T, h * 0.7);                          // W partial
     wallS(T);                                                 // S door
   } else if (v === 2) {
-    // Factory long: N/W full, E upper only (large east opening), S with center door
-    wallRect(-hx, -hy, w, T);                                // N
     wallRect(-hx, -hy, T, h);                                // W
     wallRect(hx - T, -hy, T, h * 0.38);                      // E upper only
+    twoDoors ? wallN(T) : wallRect(-hx, -hy, w, T);          // N
     wallS(T);                                                 // S door
   } else if (v === 3) {
-    // Shed: N/W full, E partial, S with center door
-    wallRect(-hx, -hy, w, T);                                // N
+    wallRect(-hx, -hy, w, T);                                // N (shacks never get two doors)
     wallRect(-hx, -hy, T, h);                                // W
     wallRect(hx - T, -hy, T, h * 0.55);                      // E partial
     wallS(T);                                                 // S door
   } else if (v === 4) {
-    // Warehouse: thick walls, loading dock notch E, S with center door
     const TT = T + 3;
-    wallRect(-hx, -hy, w, TT);                               // N
+    twoDoors ? wallN(TT) : wallRect(-hx, -hy, w, TT);        // N
     wallRect(-hx, -hy, TT, h);                               // W
     wallRect(hx - TT, -hy, TT, h * 0.62);                    // E upper
     wallRect(hx - TT, hy - TT - h * 0.22, TT, h * 0.22);    // E lower (dock gap)
     ctx.fillStyle = void_; _fr(ctx, hx - TT, hy - TT - h * 0.22, TT, h * 0.22 - 2);
-    // S thick walls with center door
-    wallRect(-hx, hy - TT, hx - doorHW, TT);
-    wallRect(doorHW, hy - TT, hx - doorHW, TT);
+    wallRect(-hx, hy - TT, hx - doorHW, TT);                 // S door left
+    wallRect(doorHW, hy - TT, hx - doorHW, TT);              // S door right
   } else if (v === 5) {
-    // Shack: N/E full, W upper only, S with center door
-    wallRect(-hx, -hy, w, T);                                // N
+    wallRect(-hx, -hy, w, T);                                // N (shacks never get two doors)
     wallRect(hx - T, -hy, T, h);                             // E
     wallRect(-hx, -hy, T, h * 0.42);                         // W upper only
     wallS(T);                                                 // S door
   } else if (v === 6) {
-    // L-shape: N/W/E-upper full, interior ledge decorative, S with center door
-    wallRect(-hx, -hy, w, T);                                // N
+    twoDoors ? wallN(T) : wallRect(-hx, -hy, w, T);          // N
     wallRect(hx - T, -hy, T, h * 0.55);                      // E upper
     wallRect(-hx, -hy, T, h);                                // W
     wallRect(w * 0.55 - hx, -hy + h * 0.55 - T, T, h * 0.45 + T); // inner E wall
     wallRect(-hx, -hy + h * 0.55 - T, w * 0.55, T);          // connector ledge
-    wallS(T);                                                 // S door (full width)
+    wallS(T);                                                 // S door
   } else if (v === 7) {
-    // Hall: full perimeter + porch bump at center door
-    wallRect(-hx, -hy, w, T);                                // N
+    twoDoors ? wallN(T) : wallRect(-hx, -hy, w, T);          // N
     wallRect(hx - T, -hy, T, h);                             // E
     wallRect(-hx, -hy, T, h);                                // W
     wallS(T);                                                 // S door
-    // porch bump centered on door
     const pw2 = doorHW * 2 + 8, ph2 = T + 4;
-    wallRect(-pw2 / 2, hy - T, pw2, ph2);
-    // window gaps in N wall
-    ctx.fillStyle = floor;
-    _fr(ctx, -hx * 0.5 - 5, -hy, 10, T);
-    _fr(ctx,  hx * 0.5 - 5, -hy, 10, T);
+    wallRect(-pw2 / 2, hy - T, pw2, ph2);                    // S porch bump
+    if (!twoDoors) {
+      // Window gaps only when N is solid
+      ctx.fillStyle = floor;
+      _fr(ctx, -hx * 0.5 - 5, -hy, 10, T);
+      _fr(ctx,  hx * 0.5 - 5, -hy, 10, T);
+    }
   }
 
   // ── damage: small void holes punched into walls ──

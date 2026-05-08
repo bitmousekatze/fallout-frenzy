@@ -1,5 +1,10 @@
-import { Entity, InputState, InventoryItem, Road, RuinArea } from "./types";
-import { SPAWN_POINT, SPAWN_SAFE_RADIUS, WORLD_SIZE, dist, makeBullet, makeExplosion, makeZombie, rand } from "./world";
+import { ChunkData, Entity, InputState, InventoryItem, Road, RuinArea } from "./types";
+import {
+  SPAWN_POINT, SPAWN_SAFE_RADIUS, WORLD_SIZE,
+  CHUNK_SIZE, LOAD_RADIUS, UNLOAD_RADIUS,
+  dist, makeBullet, makeExplosion, makeZombie, rand,
+  chunkKey, worldToChunk, generateChunk,
+} from "./world";
 
 // --- Spatial grid for O(n) broad-phase collision (Option A) ---
 const GRID_CELL = 256;
@@ -55,6 +60,8 @@ export interface GameState {
   globalSpawnTimer: number;
   insideBuilding: number | null; // entity id of building player is currently inside
   showLargeMap: boolean;
+  loadedChunks: Map<string, ChunkData>;
+  discoveredRuinRegions: Set<string>;
 }
 
 function resolveCollision(a: Entity, b: Entity) {
@@ -97,6 +104,20 @@ function isInsideBuildingRect(player: Entity, ruin: Entity): boolean {
   return Math.abs(lx) < w / 2 - 4 && Math.abs(ly) < h / 2 - 4;
 }
 
+// Returns true if a bullet has entered solid wall (not the door corridor)
+function bulletHitsWall(bullet: Entity, ruin: Entity): boolean {
+  const w = ruin.ruinW ?? 120, h = ruin.ruinH ?? 100;
+  const doorHW = w * 0.20;
+  const dx = bullet.pos.x - ruin.pos.x;
+  const dy = bullet.pos.y - ruin.pos.y;
+  const cos = Math.cos(-ruin.angle), sin = Math.sin(-ruin.angle);
+  const lx = dx * cos - dy * sin;
+  const ly = dx * sin + dy * cos;
+  if (Math.abs(lx) >= w / 2 || Math.abs(ly) >= h / 2) return false; // outside rect
+  if (Math.abs(lx) < doorHW) return false; // inside door corridor — passable
+  return true;
+}
+
 // AABB push-out for player approaching a ruin from outside.
 // Uses rectangle math so corners can't be clipped into.
 // The south face is open at the door zone (|lx| < doorHW).
@@ -117,7 +138,8 @@ function resolvePlayerVsRuinExterior(player: Entity, ruin: Entity) {
     nlx = lx > 0 ? lx + ox : lx - ox;
   } else {
     // least penetration is vertical
-    if (ly > 0 && Math.abs(lx) < doorHW) return; // south door open — let player enter
+    if (ly > 0 && Math.abs(lx) < doorHW) return; // south door open
+    if (ly < 0 && ruin.twoDoors && Math.abs(lx) < doorHW) return; // north door open
     nly = ly > 0 ? ly + oy : ly - oy;
   }
 
@@ -136,8 +158,8 @@ function constrainPlayerInsideBuilding(player: Entity, ruin: Entity) {
   let nlx = lx, nly = ly;
   // South wall — open at door zone
   if (ly > hh - r && Math.abs(lx) >= doorHW) nly = hh - r;
-  // North wall — solid
-  if (ly < -hh + r) nly = -hh + r;
+  // North wall — solid, or open at door zone for two-door buildings
+  if (ly < -hh + r && (!ruin.twoDoors || Math.abs(lx) >= doorHW)) nly = -hh + r;
   // East wall — solid
   if (lx > hw - r) nlx = hw - r;
   // West wall — solid
@@ -154,6 +176,49 @@ export function updateGame(state: GameState, input: InputState, dt: number) {
   const { player } = state;
 
   if (state.shake > 0) state.shake = Math.max(0, state.shake - dt * 4);
+
+  // Defensive init for hot-reload / state migration
+  if (!state.loadedChunks) state.loadedChunks = new Map();
+  if (!state.discoveredRuinRegions) state.discoveredRuinRegions = new Set();
+
+  // Chunk streaming: load nearby chunks, unload distant ones
+  {
+    const { cx: pcx, cy: pcy } = worldToChunk(player.pos.x, player.pos.y);
+    for (let dx = -LOAD_RADIUS; dx <= LOAD_RADIUS; dx++) {
+      for (let dy = -LOAD_RADIUS; dy <= LOAD_RADIUS; dy++) {
+        const cx = pcx + dx, cy = pcy + dy;
+        const key = chunkKey(cx, cy);
+        if (state.loadedChunks.has(key)) continue;
+        const wx = cx * CHUNK_SIZE, wy = cy * CHUNK_SIZE;
+        if (wx < 0 || wy < 0 || wx >= WORLD_SIZE || wy >= WORLD_SIZE) continue;
+        const result = generateChunk(cx, cy, state.roads);
+        state.loadedChunks.set(key, { cx, cy, entityIds: result.entities.map(e => e.id) });
+        state.entities.push(...result.entities);
+        if (result.newRoads.length > 0) state.roads.push(...result.newRoads);
+        if (result.ruinRegionKey && !state.discoveredRuinRegions.has(result.ruinRegionKey)) {
+          state.discoveredRuinRegions.add(result.ruinRegionKey);
+          if (result.newRuinArea) {
+            state.ruinAreas.push(result.newRuinArea);
+            state.ruinSpawnTimers.push(RUIN_SPAWN_INTERVAL);
+          }
+        }
+      }
+    }
+    for (const [key, chunk] of state.loadedChunks) {
+      if (Math.abs(chunk.cx - pcx) > UNLOAD_RADIUS || Math.abs(chunk.cy - pcy) > UNLOAD_RADIUS) {
+        const idSet = new Set(chunk.entityIds);
+        state.entities = state.entities.filter(e => {
+          if (!idSet.has(e.id)) return true;
+          // Keep living dynamic entities still near the player
+          if (e.hp > 0 &&
+              (e.kind === "zombie" || e.kind === "pig" || e.kind === "cow") &&
+              dist(e.pos, player.pos) < PHYSICS_RADIUS) return true;
+          return false;
+        });
+        state.loadedChunks.delete(key);
+      }
+    }
+  }
 
   // Player movement
   if (player.hp > 0) {
@@ -230,8 +295,42 @@ export function updateGame(state: GameState, input: InputState, dt: number) {
         e.state = "chase";
         const ang = Math.atan2(player.pos.y - e.pos.y, player.pos.x - e.pos.x);
         e.angle = ang;
-        e.pos.x += Math.cos(ang) * ZOMBIE_SPEED * dt;
-        e.pos.y += Math.sin(ang) * ZOMBIE_SPEED * dt;
+        let mvx = Math.cos(ang) * ZOMBIE_SPEED * dt;
+        let mvy = Math.sin(ang) * ZOMBIE_SPEED * dt;
+
+        // Steer around ruin buildings: add tangential force when inside avoidance radius
+        for (const ruin of state.entities) {
+          if (ruin.kind !== "ruin" || ruin.hp <= 0) continue;
+          const rdx = e.pos.x - ruin.pos.x;
+          const rdy = e.pos.y - ruin.pos.y;
+          const rd = Math.hypot(rdx, rdy);
+          const avoidR = ruin.radius + e.radius + 20;
+          if (rd < avoidR && rd > 0) {
+            // Tangent that points toward the player
+            const tx = -rdy / rd, ty = rdx / rd;
+            const toPlayerDot = tx * (player.pos.x - e.pos.x) + ty * (player.pos.y - e.pos.y);
+            const sign = toPlayerDot >= 0 ? 1 : -1;
+            const w = 1 - rd / avoidR;
+            mvx += tx * sign * ZOMBIE_SPEED * w * dt;
+            mvy += ty * sign * ZOMBIE_SPEED * w * dt;
+          }
+        }
+
+        // Separation from nearby zombies so they don't stack into one blob
+        for (const other of state.entities) {
+          if (other === e || other.kind !== "zombie" || other.hp <= 0) continue;
+          const sdx = e.pos.x - other.pos.x;
+          const sdy = e.pos.y - other.pos.y;
+          const sd = Math.hypot(sdx, sdy);
+          if (sd < 44 && sd > 0) {
+            const push = ((44 - sd) / 44) * ZOMBIE_SPEED * 0.6 * dt;
+            mvx += (sdx / sd) * push;
+            mvy += (sdy / sd) * push;
+          }
+        }
+
+        e.pos.x += mvx;
+        e.pos.y += mvy;
         e.attackCooldown = (e.attackCooldown ?? 0) - dt;
         if (d < ZOMBIE_ATTACK_RANGE && (e.attackCooldown ?? 0) <= 0) {
           player.hp = Math.max(0, player.hp - ZOMBIE_DAMAGE);
@@ -250,6 +349,30 @@ export function updateGame(state: GameState, input: InputState, dt: number) {
         e.angle = ang;
         e.pos.x += Math.cos(ang) * ZOMBIE_SPEED * 0.4 * dt;
         e.pos.y += Math.sin(ang) * ZOMBIE_SPEED * 0.4 * dt;
+      }
+    }
+
+    if (e.kind === "doggo") {
+      const DOGGO_SPEED = 200;
+      const FOLLOW_DIST = 60;  // stop this close to player
+      const CATCH_UP_DIST = 400; // run faster when far behind
+      const dx = player.pos.x - e.pos.x;
+      const dy = player.pos.y - e.pos.y;
+      const d = Math.hypot(dx, dy) || 1;
+      if (d > FOLLOW_DIST) {
+        const speed = d > CATCH_UP_DIST ? DOGGO_SPEED * 1.6 : DOGGO_SPEED;
+        e.pos.x += (dx / d) * speed * dt;
+        e.pos.y += (dy / d) * speed * dt;
+        e.moving = true;
+        e.animTime = (e.animTime ?? 0) + dt;
+        if (Math.abs(dx) > Math.abs(dy)) {
+          e.facing = dx > 0 ? "right" : "left";
+        } else {
+          e.facing = dy > 0 ? "down" : "up";
+        }
+      } else {
+        e.moving = false;
+        e.animTime = 0;
       }
     }
 
@@ -282,6 +405,15 @@ export function updateGame(state: GameState, input: InputState, dt: number) {
     e.ttl = (e.ttl ?? 0) - dt;
     if (e.ttl <= 0 || e.pos.x < 0 || e.pos.y < 0 || e.pos.x > WORLD_SIZE || e.pos.y > WORLD_SIZE) {
       e.hp = 0;
+      continue;
+    }
+    // Stop bullet when it hits a building wall (skip the building the player is inside)
+    if (e.hp > 0) {
+      for (const ruin of state.entities) {
+        if (ruin.kind !== "ruin" || ruin.hp <= 0) continue;
+        if (state.insideBuilding === ruin.id) continue;
+        if (bulletHitsWall(e, ruin)) { e.hp = 0; break; }
+      }
     }
   }
 
@@ -357,9 +489,9 @@ export function updateGame(state: GameState, input: InputState, dt: number) {
     if (b.kind !== "bullet" || b.hp <= 0) continue;
     for (const t of state.entities) {
       if (t.id === b.ownerId || t.hp <= 0) continue;
-      if (t.kind === "bullet" || t.kind === "corpse") continue;
+      if (t.kind === "bullet" || t.kind === "corpse" || t.kind === "ruin") continue;
       if (dist(b.pos, t.pos) < b.radius + t.radius) {
-        if (t.kind === "tree" || t.kind === "rock" || t.kind === "ruin" || t.kind === "car") {
+        if (t.kind === "tree" || t.kind === "rock" || t.kind === "car") {
           b.hp = 0;
           break;
         }
@@ -454,10 +586,15 @@ export function updateGame(state: GameState, input: InputState, dt: number) {
       state.globalSpawnTimer = GLOBAL_SPAWN_INTERVAL;
       let pos: { x: number; y: number } | null = null;
       for (let attempt = 0; attempt < 20; attempt++) {
-        const p = { x: rand(100, WORLD_SIZE - 100), y: rand(100, WORLD_SIZE - 100) };
-        // keep away from safe zone and not right on top of the player
+        // Spawn within 1500–3000 units of player so it's relevant
+        const angle = Math.random() * Math.PI * 2;
+        const radius = rand(1500, 3000);
+        const p = {
+          x: player.pos.x + Math.cos(angle) * radius,
+          y: player.pos.y + Math.sin(angle) * radius,
+        };
+        if (p.x < 100 || p.y < 100 || p.x > WORLD_SIZE - 100 || p.y > WORLD_SIZE - 100) continue;
         if (dist(p, SPAWN_POINT) < SPAWN_SAFE_RADIUS) continue;
-        if (dist(p, player.pos) < 300) continue;
         pos = p;
         break;
       }

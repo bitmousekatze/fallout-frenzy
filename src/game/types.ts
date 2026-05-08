@@ -1,6 +1,6 @@
 export type Vec2 = { x: number; y: number };
 
-export type EntityKind = "player" | "zombie" | "pig" | "cow" | "tree" | "rock" | "bullet" | "corpse" | "ruin" | "car" | "grenade" | "explosion";
+export type EntityKind = "player" | "zombie" | "pig" | "cow" | "tree" | "rock" | "bullet" | "corpse" | "ruin" | "car" | "grenade" | "explosion" | "doggo";
 
 export interface RuinArea {
   cx: number;
@@ -55,6 +55,7 @@ export interface Entity {
   ruinVariant?: number;
   ruinW?: number;
   ruinH?: number;
+  twoDoors?: boolean;
   // car
   carVariant?: number;
   // grenade
@@ -84,6 +85,12 @@ export interface TownTemplate {
   // Points where world-level roads connect into this town (relative to town center)
   roadEndpoints: Array<{ x: number; y: number }>;
   createdAt: number;
+}
+
+export interface ChunkData {
+  cx: number;
+  cy: number;
+  entityIds: number[]; // all entity IDs spawned by this chunk
 }
 
 export type FoodType = "pork" | "beef";

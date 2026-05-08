@@ -299,6 +299,7 @@ export default function TownBuilder() {
   const [townName, setTownName] = useState("New Town");
   const [templates, setTemplates] = useState<TownTemplate[]>(loadTemplates);
   const [selectedBuilding, setSelectedBuilding] = useState<number | null>(null);
+  const [placeAngle, setPlaceAngle] = useState(0);
   const [status, setStatus] = useState("");
   // Road waypoints: each Ctrl+click adds a point; plain click commits the road
   const [roadWaypoints, setRoadWaypoints] = useState<Array<{ x: number; y: number }>>([]);
@@ -358,7 +359,7 @@ export default function TownBuilder() {
     if (hover) {
       const { x, y } = hover;
       if (mode === "place") {
-        drawBuilding(ctx, { x: snap(x, showGrid), y: snap(y, showGrid), variant: selectedVariant, angle: 0 }, 0.45);
+        drawBuilding(ctx, { x: snap(x, showGrid), y: snap(y, showGrid), variant: selectedVariant, angle: placeAngle }, 0.45);
       } else if (mode === "rubble") {
         drawRubbleDot(ctx, { x, y }, 0.5);
       } else if (mode === "endpoint") {
@@ -385,7 +386,7 @@ export default function TownBuilder() {
         }
       }
     }
-  }, [buildings, roads, endpoints, rubble, showGrid, selectedBuilding, mode, hover, roadWaypoints, selectedVariant]);
+  }, [buildings, roads, endpoints, rubble, showGrid, selectedBuilding, mode, hover, roadWaypoints, selectedVariant, placeAngle]);
 
   useEffect(() => { redraw(); }, [redraw]);
 
@@ -472,7 +473,7 @@ export default function TownBuilder() {
       }
     }
     setSelectedBuilding(null);
-    setBuildings(prev => [...prev, { x: sx, y: sy, variant: selectedVariant, angle: 0 }]);
+    setBuildings(prev => [...prev, { x: sx, y: sy, variant: selectedVariant, angle: placeAngle }]);
   }
 
   function rotateSelected() {
@@ -485,7 +486,10 @@ export default function TownBuilder() {
   // Cancel road placement with Escape
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === "r" || e.key === "R") rotateSelected();
+      if (e.key === "r" || e.key === "R") {
+        if (selectedBuilding !== null) rotateSelected();
+        else setPlaceAngle(a => a + Math.PI / 2);
+      }
       if (e.key === "Escape") { setRoadWaypoints([]); }
       if ((e.key === "Delete" || e.key === "Backspace") && selectedBuilding !== null) {
         setBuildings(prev => prev.filter((_, i) => i !== selectedBuilding));

@@ -46,6 +46,8 @@ export default function Game() {
       globalSpawnTimer: 20,
       insideBuilding: null,
       showLargeMap: false,
+      loadedChunks: new Map(),
+      discoveredRuinRegions: new Set(),
     };
     stateRef.current = state;
 
@@ -98,6 +100,8 @@ export default function Game() {
           globalSpawnTimer: 20,
           insideBuilding: null,
           showLargeMap: false,
+          loadedChunks: new Map(),
+          discoveredRuinRegions: new Set(),
         };
         stateRef.current = state;
         setShowInventory(false);

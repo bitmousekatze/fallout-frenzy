@@ -1,6 +1,11 @@
 import { Entity, Road, RuinArea, TownRoad, TownTemplate, Vec2 } from "./types";
 
-export const WORLD_SIZE = 10000;
+export const WORLD_SIZE = 1_000_000;
+export const CHUNK_SIZE = 2048;
+export const LOAD_RADIUS = 5;    // chunks around player to keep loaded
+export const UNLOAD_RADIUS = 8;  // unload chunks beyond this many from player
+const RUIN_REGION_CHUNKS = 2;
+export const RUIN_REGION_SIZE = CHUNK_SIZE * RUIN_REGION_CHUNKS; // 4 096 units
 export const TILE = 64;
 export const ROAD_HALF_WIDTH = 30; // used by renderer and spawn checks
 
@@ -19,6 +24,31 @@ export function rand(min: number, max: number) {
 
 export function randInt(min: number, max: number) {
   return Math.floor(rand(min, max + 1));
+}
+
+// Mulberry32 seeded PRNG — deterministic per-chunk generation
+function mulberry32(seed: number): () => number {
+  return function () {
+    seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function chunkHash(a: number, b: number): number {
+  let h = (a * 1664525 + b * 22695477) ^ (b * 1013904223 + a * 6364136);
+  h = (((h >>> 16) ^ h) * 0x45d9f3b) | 0;
+  h = (((h >>> 16) ^ h) * 0x45d9f3b) | 0;
+  return ((h >>> 16) ^ h) >>> 0;
+}
+
+export function chunkKey(cx: number, cy: number): string {
+  return `${cx},${cy}`;
+}
+
+export function worldToChunk(wx: number, wy: number): { cx: number; cy: number } {
+  return { cx: Math.floor(wx / CHUNK_SIZE), cy: Math.floor(wy / CHUNK_SIZE) };
 }
 
 function bezierPoint(ax: number, ay: number, cpx: number, cpy: number, bx: number, by: number, t: number): Vec2 {
@@ -40,9 +70,7 @@ export function isNearAnyRoad(pos: Vec2, roads: Road[], clearance = ROAD_HALF_WI
 }
 
 export const SPAWN_POINT: Vec2 = { x: WORLD_SIZE / 2, y: WORLD_SIZE / 2 };
-// Safe zone is a 50x50 world-unit box centered on spawn (25 units each side)
-export const SAFE_ZONE_HALF = 25;
-export const SPAWN_SAFE_RADIUS = SAFE_ZONE_HALF;
+export const SAFE_ZONE_HALF = 25; // visual marker only — actual exclusion zone is SPAWN_SAFE_RADIUS
 
 export function makePlayer(): Entity {
   return {
@@ -140,8 +168,12 @@ export const RUIN_BUILDING_SIZES: Array<{ w: number; h: number; r: number }> = [
   { w: 195, h: 195, r: 105 },  // 7: medium square
 ];
 
+// Variants large enough to justify a second door (not tiny shacks/sheds)
+const TWO_DOOR_VARIANTS = new Set([0, 2, 4, 6, 7]);
+
 export function makeRuinBuilding(pos: Vec2, variant: number, angle?: number): Entity {
-  const s = RUIN_BUILDING_SIZES[variant % RUIN_BUILDING_SIZES.length];
+  const v = variant % RUIN_BUILDING_SIZES.length;
+  const s = RUIN_BUILDING_SIZES[v];
   return {
     id: nextId(),
     kind: "ruin",
@@ -151,9 +183,10 @@ export function makeRuinBuilding(pos: Vec2, variant: number, angle?: number): En
     angle: angle ?? rand(0, Math.PI * 2),
     hp: 999,
     maxHp: 999,
-    ruinVariant: variant % RUIN_BUILDING_SIZES.length,
+    ruinVariant: v,
     ruinW: s.w,
     ruinH: s.h,
+    twoDoors: TWO_DOOR_VARIANTS.has(v) && Math.random() < 0.4,
   };
 }
 
@@ -198,6 +231,24 @@ export function makeExplosion(pos: Vec2): Entity {
   };
 }
 
+export function makeDoggo(): Entity {
+  const offset = rand(-200, 200);
+  return {
+    id: nextId(),
+    kind: "doggo",
+    pos: { x: SPAWN_POINT.x + offset, y: SPAWN_POINT.y + offset },
+    vel: { x: 0, y: 0 },
+    radius: 16,
+    angle: 0,
+    hp: 999,
+    maxHp: 999,
+    state: "wander",
+    animTime: 0,
+    facing: "down",
+    moving: false,
+  };
+}
+
 export function makeDerelictCar(pos: Vec2, variant: number): Entity {
   return {
     id: nextId(),
@@ -212,7 +263,173 @@ export function makeDerelictCar(pos: Vec2, variant: number): Entity {
   };
 }
 
-const RUIN_AREA_NAMES = [
+// --- Ruin layout system ---
+
+type LayoutType = "grid" | "strip" | "compound";
+
+const LAYOUT_SEQUENCE: LayoutType[] = [
+  "grid", "strip", "compound", "grid", "strip",
+  "compound", "grid", "strip", "grid", "compound",
+  "strip", "grid", "compound", "strip", "grid",
+  "compound", "strip", "grid", "compound", "strip",
+];
+
+// Rotate a local offset vector by the ruin's primary axis angle
+function rv(lx: number, ly: number, a: number): Vec2 {
+  const c = Math.cos(a), s = Math.sin(a);
+  return { x: lx * c - ly * s, y: lx * s + ly * c };
+}
+
+// Place a building in ruin-local space; returns false if overlapping another building or a road
+function tryPlaceBuilding(
+  cx: number, cy: number,
+  lx: number, ly: number,
+  localDoorDir: number,
+  variant: number,
+  primaryAngle: number,
+  placed: Entity[], entities: Entity[],
+  roads: Road[]
+): boolean {
+  const drift = rand(-Math.PI / 14, Math.PI / 14);
+  const p = rv(lx, ly, primaryAngle);
+  const pos = { x: cx + p.x, y: cy + p.y };
+  const s = RUIN_BUILDING_SIZES[variant % RUIN_BUILDING_SIZES.length];
+  for (const b of placed) {
+    if (dist(pos, b.pos) < s.r + b.radius + 24) return false;
+  }
+  if (isNearAnyRoad(pos, roads, ROAD_HALF_WIDTH + s.r + 20)) return false;
+  const worldDoorDir = localDoorDir + primaryAngle;
+  const buildingAngle = worldDoorDir - Math.PI / 2 + drift;
+  const b = makeRuinBuilding(pos, variant, buildingAngle);
+  entities.push(b);
+  placed.push(b);
+  return true;
+}
+
+function placeGrid(cx: number, cy: number, primaryAngle: number, placed: Entity[], entities: Entity[], roads: Road[]) {
+  const SETBACK = 60;
+  const mainLotXs = [-320, -180, -50, 50, 180, 320];
+  for (const lx of mainLotXs) {
+    if (Math.abs(lx) < 80) continue;
+    const vN = Math.abs(lx) > 220 ? randInt(3, 5) : randInt(0, 2);
+    const sN = RUIN_BUILDING_SIZES[vN];
+    tryPlaceBuilding(cx, cy, lx, -(SETBACK + sN.h / 2), Math.PI / 2, vN, primaryAngle, placed, entities, roads);
+
+    const vS = Math.abs(lx) > 220 ? randInt(3, 5) : randInt(0, 2);
+    const sS = RUIN_BUILDING_SIZES[vS];
+    tryPlaceBuilding(cx, cy, lx, SETBACK + sS.h / 2, -Math.PI / 2, vS, primaryAngle, placed, entities, roads);
+  }
+  for (const ly of [-240, 240]) {
+    const vW = randInt(1, 5);
+    const sW = RUIN_BUILDING_SIZES[vW];
+    tryPlaceBuilding(cx, cy, -(SETBACK + sW.h / 2), ly, 0, vW, primaryAngle, placed, entities, roads);
+
+    const vE = randInt(1, 5);
+    const sE = RUIN_BUILDING_SIZES[vE];
+    tryPlaceBuilding(cx, cy, SETBACK + sE.h / 2, ly, Math.PI, vE, primaryAngle, placed, entities, roads);
+  }
+}
+
+function placeStrip(cx: number, cy: number, primaryAngle: number, placed: Entity[], entities: Entity[], roads: Road[]) {
+  const SETBACK = 60;
+  const lotXs = [-300, -160, 0, 160, 300];
+  for (const lx of lotXs) {
+    const vN = randInt(0, 5);
+    const sN = RUIN_BUILDING_SIZES[vN];
+    tryPlaceBuilding(cx, cy, lx, -(SETBACK + sN.h / 2), Math.PI / 2, vN, primaryAngle, placed, entities, roads);
+
+    const vS = randInt(0, 5);
+    const sS = RUIN_BUILDING_SIZES[vS];
+    tryPlaceBuilding(cx, cy, lx, SETBACK + sS.h / 2, -Math.PI / 2, vS, primaryAngle, placed, entities, roads);
+  }
+}
+
+function placeCompound(cx: number, cy: number, primaryAngle: number, placed: Entity[], entities: Entity[], roads: Road[]) {
+  const D = 200;
+  tryPlaceBuilding(cx, cy, -130, -D, Math.PI / 2, 4, primaryAngle, placed, entities, roads);
+  tryPlaceBuilding(cx, cy, 130, -D, Math.PI / 2, 2, primaryAngle, placed, entities, roads);
+  tryPlaceBuilding(cx, cy, -80, D, -Math.PI / 2, 6, primaryAngle, placed, entities, roads);
+  tryPlaceBuilding(cx, cy, 120, D, -Math.PI / 2, 4, primaryAngle, placed, entities, roads);
+  tryPlaceBuilding(cx, cy, -D, -100, 0, 2, primaryAngle, placed, entities, roads);
+  tryPlaceBuilding(cx, cy, -D, 90, 0, 3, primaryAngle, placed, entities, roads);
+  tryPlaceBuilding(cx, cy, D, 0, Math.PI, 4, primaryAngle, placed, entities, roads);
+}
+
+function placeRuinLayout(cx: number, cy: number, type: LayoutType, placed: Entity[], entities: Entity[], roads: Road[]) {
+  const primaryAngle = type === "grid"
+    ? (Math.random() < 0.5 ? 0 : Math.PI / 2)
+    : Math.round(Math.random() * 4) * (Math.PI / 4);
+
+  if (type === "grid")       placeGrid(cx, cy, primaryAngle, placed, entities, roads);
+  else if (type === "strip") placeStrip(cx, cy, primaryAngle, placed, entities, roads);
+  else                       placeCompound(cx, cy, primaryAngle, placed, entities, roads);
+}
+
+// True if pos falls inside any building's rectangular footprint (with a small buffer)
+function posOnAnyBuilding(pos: Vec2, buildings: Entity[]): boolean {
+  for (const b of buildings) {
+    if (b.kind !== "ruin") continue;
+    const w = b.ruinW ?? 120, h = b.ruinH ?? 100;
+    const dx = pos.x - b.pos.x, dy = pos.y - b.pos.y;
+    const cos = Math.cos(-b.angle), sin = Math.sin(-b.angle);
+    const lx = dx * cos - dy * sin;
+    const ly = dx * sin + dy * cos;
+    if (Math.abs(lx) < w / 2 + 40 && Math.abs(ly) < h / 2 + 40) return true;
+  }
+  return false;
+}
+
+// Place 2–4 cars along the ruin's internal "street" (derived from building orientations)
+function placeRuinCars(cx: number, cy: number, buildings: Entity[], entities: Entity[]) {
+  if (buildings.length === 0) return;
+  // Derive street direction from the most common building angle group
+  const streetAngle = buildings[0].angle + Math.PI / 2; // perpendicular to first building's door
+  const count = randInt(2, 4);
+  for (let i = 0; i < count; i++) {
+    const along = rand(-250, 250);
+    const across = rand(-40, 40) + (Math.random() < 0.5 ? 55 : -55);
+    const p = rv(along, across, streetAngle);
+    const pos = { x: cx + p.x, y: cy + p.y };
+    const car = makeDerelictCar(pos, randInt(0, 3));
+    car.angle = streetAngle + rand(-Math.PI / 10, Math.PI / 10);
+    entities.push(car);
+  }
+}
+
+// Hardcoded spawn town — placed at player start, no zombies, no ruins nearby
+const SPAWN_TEMPLATE = {
+  roadEndpoints: [
+    { x: -9, y: 460 },
+    { x: 686, y: -4 },
+    { x: -693, y: -4 },
+    { x: -7, y: -693 },
+  ],
+  buildings: [
+    { x: 490, y: -140, variant: 0, angle: 6.283 },
+    { x: 140, y: -140, variant: 0, angle: 6.283 },
+    { x: 210, y: -350, variant: 2, angle: 15.708 },
+    { x: 210, y: -490, variant: 2, angle: 15.708 },
+    { x: -560, y: -70, variant: 5, angle: 23.562 },
+    { x: -490, y: -280, variant: 5, angle: 23.562 },
+    { x: -350, y: -490, variant: 5, angle: 23.562 },
+    { x: -140, y: -630, variant: 5, angle: 23.562 },
+    { x: -280, y: 280, variant: 4, angle: 25.133 },
+    { x: 350, y: 280, variant: 4, angle: 28.274 },
+  ],
+  roads: [
+    { ax: -3, ay: -673, bx: -5, by: -693, cx: -5, cy: -693 },
+    { ax: -5, ay: 454, bx: 0, by: 7, cx: -5, cy: 454 },
+    { ax: -689, ay: -1, bx: 684, by: 0, cx: -3, cy: -1 },
+    { ax: 684, ay: 0, bx: 684, by: 0, cx: 684, cy: 0 },
+    { ax: -5, ay: -689, bx: -3, by: -8, cx: -3, cy: -8 },
+    { ax: -3, ay: -8, bx: -5, by: 6, cx: -3, cy: -8 },
+  ],
+};
+
+// Spawn area safe radius — covers all spawn template buildings (farthest ~645 units) + margin
+export const SPAWN_SAFE_RADIUS = 800;
+
+export const RUIN_AREA_NAMES = [
   "Dusty Creek",
   "Old Pines",
   "Ashwood",
@@ -235,17 +452,156 @@ const RUIN_AREA_NAMES = [
   "Coldfall",
 ];
 
-function isInsideAnyBuilding(pos: Vec2, buildings: Entity[]): boolean {
-  for (const b of buildings) {
-    if (b.kind !== "ruin") continue;
-    const w = b.ruinW ?? 120, h = b.ruinH ?? 100;
-    const dx = pos.x - b.pos.x, dy = pos.y - b.pos.y;
-    const cos = Math.cos(-b.angle), sin = Math.sin(-b.angle);
-    const lx = dx * cos - dy * sin;
-    const ly = dx * sin + dy * cos;
-    if (Math.abs(lx) < w / 2 && Math.abs(ly) < h / 2) return true;
+
+export function generateChunk(
+  cx: number,
+  cy: number,
+  roads: Road[]
+): { entities: Entity[]; newRoads: Road[]; newRuinArea: RuinArea | null; ruinRegionKey: string | null } {
+  const rng = mulberry32(chunkHash(cx, cy));
+  const r = (min: number, max: number) => min + rng() * (max - min);
+  const ri = (min: number, max: number) => Math.floor(r(min, max + 1));
+
+  const entities: Entity[] = [];
+  const newRoads: Road[] = [];
+  const chunkWorldX = cx * CHUNK_SIZE;
+  const chunkWorldY = cy * CHUNK_SIZE;
+  const chunkCenterX = chunkWorldX + CHUNK_SIZE / 2;
+  const chunkCenterY = chunkWorldY + CHUNK_SIZE / 2;
+  const nearSpawn = dist({ x: chunkCenterX, y: chunkCenterY }, SPAWN_POINT) < SPAWN_SAFE_RADIUS + 400;
+
+  // Determine if this chunk owns a ruin region center
+  const rx = Math.floor(chunkWorldX / RUIN_REGION_SIZE);
+  const ry = Math.floor(chunkWorldY / RUIN_REGION_SIZE);
+  const ruinCenterX = rx * RUIN_REGION_SIZE + RUIN_REGION_SIZE / 2;
+  const ruinCenterY = ry * RUIN_REGION_SIZE + RUIN_REGION_SIZE / 2;
+  const ruinOwnerChunk = worldToChunk(ruinCenterX, ruinCenterY);
+  const ownsRuinRegion = ruinOwnerChunk.cx === cx && ruinOwnerChunk.cy === cy;
+  const regionKey = ownsRuinRegion ? `${rx},${ry}` : null;
+
+  let newRuinArea: RuinArea | null = null;
+
+  if (ownsRuinRegion && !nearSpawn) {
+    const ruinRng = mulberry32(chunkHash(rx * 31337, ry * 99991));
+    const rr = (min: number, max: number) => min + ruinRng() * (max - min);
+    const rri = (min: number, max: number) => Math.floor(rr(min, max + 1));
+
+    if (ruinRng() < 0.6) {
+      const ruinRadius = rr(500, 700);
+      const nameIdx = ((rx * 7 + ry * 13) & 0x7fffffff) % RUIN_AREA_NAMES.length;
+      newRuinArea = { cx: ruinCenterX, cy: ruinCenterY, radius: ruinRadius, name: RUIN_AREA_NAMES[nameIdx] };
+
+      const placed: Entity[] = [];
+      const layoutIdx = ((rx + ry) & 0x7fffffff) % LAYOUT_SEQUENCE.length;
+      placeRuinLayout(ruinCenterX, ruinCenterY, LAYOUT_SEQUENCE[layoutIdx], placed, entities, roads);
+
+      // Zombies in ruin
+      const zombieCount = rri(8, 18);
+      for (let z = 0; z < zombieCount; z++) {
+        const angle = rr(0, Math.PI * 2);
+        const radius = rr(50, ruinRadius + 120);
+        entities.push(makeZombie({ x: ruinCenterX + Math.cos(angle) * radius, y: ruinCenterY + Math.sin(angle) * radius }));
+      }
+
+      // Cars and perimeter trees
+      placeRuinCars(ruinCenterX, ruinCenterY, placed, entities);
+      for (let t = 0; t < rri(2, 5); t++) {
+        const angle = rr(0, Math.PI * 2);
+        const radius = rr(ruinRadius * 0.7, ruinRadius * 1.4);
+        const pos = { x: ruinCenterX + Math.cos(angle) * radius, y: ruinCenterY + Math.sin(angle) * radius };
+        if (!posOnAnyBuilding(pos, placed)) entities.push(makeTree(pos));
+      }
+
+      // Internal ruin roads: horizontal and vertical streets through the center
+      const streetLen = ruinRadius * 2.2;
+      for (let s = 0; s < 2; s++) {
+        const a = s * Math.PI / 2;
+        const sax = ruinCenterX - Math.cos(a) * streetLen / 2;
+        const say = ruinCenterY - Math.sin(a) * streetLen / 2;
+        const sbx = ruinCenterX + Math.cos(a) * streetLen / 2;
+        const sby = ruinCenterY + Math.sin(a) * streetLen / 2;
+        newRoads.push({
+          ax: sax, ay: say, bx: sbx, by: sby,
+          cx: (sax + sbx) / 2 + (rr(0, 1) - 0.5) * 40,
+          cy: (say + sby) / 2 + (rr(0, 1) - 0.5) * 40,
+          seed: chunkHash(cx * 13 + s, cy * 17 + s) >>> 0,
+          gaps: [[rr(0.05, 0.22), rr(0.08, 0.25)], [rr(0.74, 0.88), rr(0.77, 0.92)]],
+        });
+      }
+
+      // Helper: check if a neighbouring region has a ruin (mirrors the ruin-chance test)
+      const regionHasRuin = (nrx: number, nry: number) => {
+        const nRng = mulberry32(chunkHash(nrx * 31337, nry * 99991));
+        return nRng() < 0.6;
+      };
+
+      // Road segment helper
+      const pushRoad = (ax: number, ay: number, bx: number, by: number, seedMix: number) => {
+        const mx = (ax + bx) / 2, my = (ay + by) / 2;
+        const dx = bx - ax, dy = by - ay;
+        const len = Math.hypot(dx, dy) || 1;
+        const bend = (rr(0, 1) - 0.5) * len * 0.12;
+        newRoads.push({
+          ax, ay, bx, by,
+          cx: mx + (-dy / len) * bend,
+          cy: my + (dx / len) * bend,
+          seed: chunkHash(rx * 7 + seedMix, ry * 11 + seedMix) >>> 0,
+          gaps: [[rr(0.12, 0.38), rr(0.16, 0.42)], [rr(0.56, 0.78), rr(0.6, 0.82)]],
+        });
+      };
+
+      // Connect east to west: this ruin → east neighbour (generated by western ruin only)
+      if (regionHasRuin(rx + 1, ry)) {
+        const eCX = (rx + 1) * RUIN_REGION_SIZE + RUIN_REGION_SIZE / 2;
+        const eCY = ruinCenterY;
+        pushRoad(ruinCenterX, ruinCenterY, eCX, eCY, 1);
+      }
+
+      // Connect north to south: this ruin → south neighbour (generated by northern ruin only)
+      if (regionHasRuin(rx, ry + 1)) {
+        const sCX = ruinCenterX;
+        const sCY = (ry + 1) * RUIN_REGION_SIZE + RUIN_REGION_SIZE / 2;
+        pushRoad(ruinCenterX, ruinCenterY, sCX, sCY, 2);
+      }
+
+      // Ruins directly adjacent to spawn connect to the nearest spawn road endpoint
+      const spawnRx = Math.floor(SPAWN_POINT.x / RUIN_REGION_SIZE);
+      const spawnRy = Math.floor(SPAWN_POINT.y / RUIN_REGION_SIZE);
+      if (Math.abs(rx - spawnRx) <= 1 && Math.abs(ry - spawnRy) <= 1) {
+        const spx = SPAWN_POINT.x, spy = SPAWN_POINT.y;
+        const spawnEps = SPAWN_TEMPLATE.roadEndpoints.map(ep => ({ x: spx + ep.x, y: spy + ep.y }));
+        let nearEp = spawnEps[0];
+        let nearEpD = dist({ x: ruinCenterX, y: ruinCenterY }, nearEp);
+        for (const ep of spawnEps) {
+          const d = dist({ x: ruinCenterX, y: ruinCenterY }, ep);
+          if (d < nearEpD) { nearEpD = d; nearEp = ep; }
+        }
+        pushRoad(ruinCenterX, ruinCenterY, nearEp.x, nearEp.y, 3);
+      }
+    }
+  } else if (!nearSpawn) {
+    // Terrain: trees, rocks, zombies, animals
+    const treeCount = ri(2, 6);
+    for (let i = 0; i < treeCount; i++) {
+      entities.push(makeTree({ x: chunkWorldX + r(40, CHUNK_SIZE - 40), y: chunkWorldY + r(40, CHUNK_SIZE - 40) }));
+    }
+    const rockCount = ri(0, 2);
+    for (let i = 0; i < rockCount; i++) {
+      entities.push(makeRock({ x: chunkWorldX + r(40, CHUNK_SIZE - 40), y: chunkWorldY + r(40, CHUNK_SIZE - 40) }));
+    }
+    if (rng() < 0.8) {
+      const zombieCount = ri(2, 6);
+      for (let i = 0; i < zombieCount; i++) {
+        entities.push(makeZombie({ x: chunkWorldX + r(40, CHUNK_SIZE - 40), y: chunkWorldY + r(40, CHUNK_SIZE - 40) }));
+      }
+    }
+    if (rng() < 0.25) {
+      const kind = rng() < 0.5 ? "pig" : "cow" as const;
+      entities.push(makeAnimal(kind, { x: chunkWorldX + r(40, CHUNK_SIZE - 40), y: chunkWorldY + r(40, CHUNK_SIZE - 40) }));
+    }
   }
-  return false;
+
+  return { entities, newRoads, newRuinArea, ruinRegionKey: regionKey };
 }
 
 export function generateWorld() {
@@ -253,180 +609,30 @@ export function generateWorld() {
   const player = makePlayer();
   entities.push(player);
 
-  // TEST: all 8 building variants in a row south of spawn — door faces north (toward player)
-  // Walk south from spawn to reach them; approach from the south side to enter
-  {
-    const spacing = 310;
-    const startX = SPAWN_POINT.x - spacing * 3.5;
-    const testY = SPAWN_POINT.y + 420;
-    for (let v = 0; v < 8; v++) {
-      entities.push(makeRuinBuilding({ x: startX + v * spacing, y: testY }, v, Math.PI));
-    }
+  const roads: Road[] = [];
+  const { x: sx, y: sy } = SPAWN_POINT;
+
+  // Spawn town buildings
+  for (const tb of SPAWN_TEMPLATE.buildings) {
+    entities.push(makeRuinBuilding({ x: sx + tb.x, y: sy + tb.y }, tb.variant, tb.angle));
   }
 
-  const margin = 600;
-  const ruinAreas: RuinArea[] = [];
-  const spawnSafeRadius = SAFE_ZONE_HALF + 800; // ruins stay outside safe zone + buffer
-  // Track which template (if any) was assigned to each ruin area, for road endpoint lookup
-  const ruinTemplates: Array<TownTemplate | null> = [];
-
-  // --- Ruin areas ---
-  for (let attempt = 0; ruinAreas.length < 20 && attempt < 2000; attempt++) {
-    const cx = rand(margin, WORLD_SIZE - margin);
-    const cy = rand(margin, WORLD_SIZE - margin);
-    const center = { x: cx, y: cy };
-
-    if (dist(center, player.pos) < spawnSafeRadius) continue;
-    if (ruinAreas.some(r => dist(center, { x: r.cx, y: r.cy }) < 1200)) continue;
-
-    const ruinRadius = rand(500, 700);
-    ruinAreas.push({ cx, cy, radius: ruinRadius, name: RUIN_AREA_NAMES[ruinAreas.length] });
-
-    // Buildings — use a saved town template if available, else random scatter
-    const templates = loadTownTemplates();
-    const ruinBuildings: Entity[] = [];
-    if (templates.length > 0) {
-      const tmpl = templates[Math.floor(Math.random() * templates.length)];
-      ruinTemplates.push(tmpl);
-      for (const tb of tmpl.buildings) {
-        const b = makeRuinBuilding({ x: cx + tb.x, y: cy + tb.y }, tb.variant, tb.angle);
-        entities.push(b);
-        ruinBuildings.push(b);
-      }
-      for (const rb of tmpl.rubble) {
-        const pos = { x: cx + rb.x, y: cy + rb.y };
-        if (!isInsideAnyBuilding(pos, ruinBuildings)) entities.push(makeRock(pos));
-      }
-    } else {
-      ruinTemplates.push(null);
-      const buildingCount = randInt(5, 15);
-      const placed: Vec2[] = [];
-      for (let b = 0; b < buildingCount; b++) {
-        let bPos: Vec2 = { x: 0, y: 0 };
-        let tries = 0;
-        do {
-          const angle = rand(0, Math.PI * 2);
-          const r = rand(80, ruinRadius - 80);
-          bPos = { x: cx + Math.cos(angle) * r, y: cy + Math.sin(angle) * r };
-          tries++;
-        } while (placed.some(o => dist(bPos, o) < 130) && tries < 50);
-        placed.push(bPos);
-        const b2 = makeRuinBuilding(bPos, randInt(0, 7));
-        entities.push(b2);
-        ruinBuildings.push(b2);
-      }
-    }
-
-    // Rubble rocks inside ruin — skip positions inside building footprints
-    for (let i = 0; i < randInt(5, 10); i++) {
-      const angle = rand(0, Math.PI * 2);
-      const r = rand(40, ruinRadius);
-      const pos = { x: cx + Math.cos(angle) * r, y: cy + Math.sin(angle) * r };
-      if (!isInsideAnyBuilding(pos, ruinBuildings)) entities.push(makeRock(pos));
-    }
-
-    // Zombies
-    for (let i = 0; i < randInt(8, 18); i++) {
-      const angle = rand(0, Math.PI * 2);
-      const r = rand(50, ruinRadius + 120);
-      entities.push(makeZombie({ x: cx + Math.cos(angle) * r, y: cy + Math.sin(angle) * r }));
-    }
-
-    // Trees on edges
-    for (let i = 0; i < randInt(2, 5); i++) {
-      const angle = rand(0, Math.PI * 2);
-      const r = rand(ruinRadius * 0.7, ruinRadius * 1.4);
-      entities.push(makeTree({ x: cx + Math.cos(angle) * r, y: cy + Math.sin(angle) * r }));
-    }
-
-    // Derelict cars inside ruin (2–4)
-    for (let i = 0; i < randInt(2, 4); i++) {
-      const angle = rand(0, Math.PI * 2);
-      const r = rand(60, ruinRadius - 60);
-      entities.push(makeDerelictCar({ x: cx + Math.cos(angle) * r, y: cy + Math.sin(angle) * r }, randInt(0, 3)));
-    }
+  // Spawn town internal roads (no gaps — safe zone)
+  for (const tr of SPAWN_TEMPLATE.roads) {
+    roads.push({
+      ax: sx + tr.ax, ay: sy + tr.ay,
+      bx: sx + tr.bx, by: sy + tr.by,
+      cx: sx + tr.cx, cy: sy + tr.cy,
+      seed: Math.floor(Math.random() * 100000),
+      gaps: [],
+    });
   }
 
-  // --- Roads ---
-  // Build per-ruin connection points: if a template has road endpoints, use the nearest
-  // one to the world center; otherwise use the ruin center.
-  const connectionPoints: Vec2[] = ruinAreas.map((ra, i) => {
-    const tmpl = ruinTemplates[i];
-    if (tmpl && tmpl.roadEndpoints && tmpl.roadEndpoints.length > 0) {
-      // Pick the endpoint closest to the world center (most likely to be on a road edge)
-      let best = tmpl.roadEndpoints[0];
-      let bestDist = Math.hypot(best.x, best.y);
-      for (const ep of tmpl.roadEndpoints) {
-        const d = Math.hypot(ep.x, ep.y);
-        if (d < bestDist) { bestDist = d; best = ep; }
-      }
-      return { x: ra.cx + best.x, y: ra.cy + best.y };
-    }
-    return { x: ra.cx, y: ra.cy };
-  });
-  const roads = generateRoads(ruinAreas, connectionPoints);
+  // Friendly doggo NPC wanders around spawn
+  entities.push(makeDoggo());
 
-  // Instantiate internal roads from templates
-  for (let i = 0; i < ruinAreas.length; i++) {
-    const tmpl = ruinTemplates[i];
-    if (!tmpl || !tmpl.roads) continue;
-    const { cx, cy } = ruinAreas[i];
-    for (const tr of tmpl.roads) {
-      roads.push(makeTownRoad(tr, cx, cy));
-    }
-  }
-
-  // Cars abandoned along road midpoints (1–2 per road)
-  for (const road of roads) {
-    const count = randInt(1, 2);
-    for (let i = 0; i < count; i++) {
-      const t = rand(0.2, 0.8);
-      const p = bezierPoint(road.ax, road.ay, road.cx, road.cy, road.bx, road.by, t);
-      // offset sideways so they're on the verge or partially blocking
-      const dtx = 2 * (1 - t) * (road.cx - road.ax) + 2 * t * (road.bx - road.cx);
-      const dty = 2 * (1 - t) * (road.cy - road.ay) + 2 * t * (road.by - road.cy);
-      const tlen = Math.hypot(dtx, dty) || 1;
-      const nx = -dty / tlen;
-      const ny = dtx / tlen;
-      const side = Math.random() < 0.5 ? 1 : -1;
-      const offset = rand(0, ROAD_HALF_WIDTH * 1.2) * side;
-      entities.push(makeDerelictCar({ x: p.x + nx * offset, y: p.y + ny * offset }, randInt(0, 3)));
-    }
-  }
-
-  // --- Trees (skip ruin cores and road corridors) ---
-  for (let i = 0; i < 600; i++) {
-    const pos = { x: rand(100, WORLD_SIZE - 100), y: rand(100, WORLD_SIZE - 100) };
-    if (ruinAreas.some(r => dist(pos, { x: r.cx, y: r.cy }) < r.radius * 0.6)) continue;
-    if (isNearAnyRoad(pos, roads)) continue;
-    entities.push(makeTree(pos));
-  }
-
-  // --- Rocks (skip road corridors) ---
-  for (let i = 0; i < 220; i++) {
-    const pos = { x: rand(100, WORLD_SIZE - 100), y: rand(100, WORLD_SIZE - 100) };
-    if (isNearAnyRoad(pos, roads)) continue;
-    entities.push(makeRock(pos));
-  }
-
-  // --- Roaming zombies ---
-  for (let i = 0; i < 80; i++) {
-    let p: Vec2;
-    do {
-      p = { x: rand(100, WORLD_SIZE - 100), y: rand(100, WORLD_SIZE - 100) };
-    } while (dist(p, SPAWN_POINT) < 500);
-    entities.push(makeZombie(p));
-  }
-
-  // --- Animals ---
-  for (let i = 0; i < 60; i++) {
-    entities.push(makeAnimal("pig", { x: rand(100, WORLD_SIZE - 100), y: rand(100, WORLD_SIZE - 100) }));
-  }
-  for (let i = 0; i < 40; i++) {
-    entities.push(makeAnimal("cow", { x: rand(100, WORLD_SIZE - 100), y: rand(100, WORLD_SIZE - 100) }));
-  }
-
-  return { entities, player, ruinAreas, roads };
+  // ruinAreas starts empty — chunks populate it as the player explores
+  return { entities, player, ruinAreas: [] as RuinArea[], roads };
 }
 
 function makeTownRoad(tr: TownRoad, cx: number, cy: number): Road {

@@ -1,3 +1,11 @@
+import doggoFront1 from "@/assets/doggo/FrontWalk1.png";
+import doggoFront2 from "@/assets/doggo/FrontWalk2.png";
+import doggoBack1 from "@/assets/doggo/BackWalk1.png";
+import doggoBack2 from "@/assets/doggo/BackWalk2.png";
+import doggoLeft1 from "@/assets/doggo/LeftWalk1.png";
+import doggoLeft2 from "@/assets/doggo/LeftWalk2.png";
+import doggoRight1 from "@/assets/doggo/RightWalk1.png";
+import doggoRight2 from "@/assets/doggo/RightWalk2.png";
 import front1 from "@/assets/player/front1.png";
 import front2 from "@/assets/player/front2.png";
 import back1 from "@/assets/player/back1.png";
@@ -25,4 +33,11 @@ export const playerSprites: Record<Facing, [HTMLImageElement, HTMLImageElement]>
   left: [load(left1), load(left2)],
   right: [load(right1), load(right2)],
   up: [load(up1), load(up2)],
+};
+
+export const doggoSprites: Record<"down" | "up" | "left" | "right", [HTMLImageElement, HTMLImageElement]> = {
+  down:  [load(doggoFront1), load(doggoFront2)],
+  up:    [load(doggoBack1),  load(doggoBack2)],
+  left:  [load(doggoLeft1),  load(doggoLeft2)],
+  right: [load(doggoRight1), load(doggoRight2)],
 };
