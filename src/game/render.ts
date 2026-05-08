@@ -186,7 +186,7 @@ export function render(
 
   ctx.restore();
 
-  drawHud(ctx, state, viewW, viewH, isMobile);
+  drawHud(ctx, state, viewW, viewH, isMobile, remotePlayers.size);
 }
 
 function drawEntity(ctx: CanvasRenderingContext2D, e: Entity) {
@@ -772,7 +772,7 @@ function drawRuinBuilding(ctx: CanvasRenderingContext2D, e: Entity) {
 
 // --- HUD ---
 
-function drawHud(ctx: CanvasRenderingContext2D, state: GameState, viewW: number, viewH: number, isMobile = false) {
+function drawHud(ctx: CanvasRenderingContext2D, state: GameState, viewW: number, viewH: number, isMobile = false, onlineCount = 0) {
   const { player } = state;
 
   // Health bar — on mobile move to top-center so it clears the joystick
@@ -791,9 +791,9 @@ function drawHud(ctx: CanvasRenderingContext2D, state: GameState, viewW: number,
   ctx.textBaseline = "middle";
   ctx.fillText(`HP ${Math.ceil(player.hp)} / ${player.maxHp}`, bx + 10, by + barH / 2);
 
-  // Kills + coords
+  // Kills + coords + online count
   ctx.fillStyle = hsl("--hud-bg", 0.85);
-  ctx.fillRect(viewW - 200, 16, 184, 56);
+  ctx.fillRect(viewW - 200, 16, 184, 72);
   ctx.fillStyle = hsl("--foreground");
   ctx.font = "bold 14px ui-sans-serif, system-ui";
   ctx.textBaseline = "top";
@@ -804,6 +804,8 @@ function drawHud(ctx: CanvasRenderingContext2D, state: GameState, viewW: number,
     `X ${Math.round(player.pos.x - SPAWN_POINT.x)}  Y ${Math.round(player.pos.y - SPAWN_POINT.y)}`,
     viewW - 188, 48
   );
+  ctx.fillStyle = onlineCount > 0 ? "rgba(100,220,100,0.9)" : "rgba(180,180,180,0.6)";
+  ctx.fillText(`● ${onlineCount + 1} online`, viewW - 188, 64);
 
   // Minimap
   const mmSize = 180;

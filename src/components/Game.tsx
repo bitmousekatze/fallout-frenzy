@@ -33,22 +33,23 @@ export default function Game() {
   // Supabase Realtime relay
   useEffect(() => {
     const myId = myIdRef.current;
-    const channel = supabase.channel(CHANNEL, { config: { presence: { key: myId } } });
+    const channel = supabase.channel(CHANNEL, {
+      config: { broadcast: { self: false, ack: false } },
+    });
     channelRef.current = channel;
 
     channel
       .on("broadcast", { event: "pos" }, ({ payload }) => {
-        if (payload.id === myId) return;
+        if (!payload?.id || payload.id === myId) return;
         if (payload.type === "leave") {
           remotePlayersRef.current.delete(payload.id);
         } else {
           remotePlayersRef.current.set(payload.id, payload as RemotePlayer);
         }
       })
-      .on("presence", { event: "leave" }, ({ leftPresences }) => {
-        for (const p of leftPresences) remotePlayersRef.current.delete(p.key ?? "");
-      })
-      .subscribe();
+      .subscribe((status) => {
+        console.log("[FF] Realtime status:", status);
+      });
 
     return () => {
       channel.send({ type: "broadcast", event: "pos", payload: { id: myId, type: "leave" } });
