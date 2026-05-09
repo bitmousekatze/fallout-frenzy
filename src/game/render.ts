@@ -1,4 +1,4 @@
-import { Entity, RemotePlayer, Road } from "./types";
+import { Entity, RemotePlayer, Road, WEAPONS } from "./types";
 import { GameState } from "./update";
 import { SAFE_ZONE_HALF, SPAWN_POINT, TILE, WORLD_SIZE } from "./world";
 import { doggoSprites, playerSprites } from "./sprites";
@@ -146,9 +146,12 @@ export function render(
 
   // Entities — cull to viewport first, then sort only what's visible.
   // If player is inside a building, draw that building first (below player).
+  // NPC icons (trader, gambling) are drawn last so buildings never occlude them.
   const drawList: Entity[] = [];
+  const iconList: Entity[] = [];
   for (const e of state.entities) {
     if (!inView(e.pos.x, e.pos.y, e.radius + 60)) continue;
+    if (e.kind === "trader" || e.kind === "gambling") { iconList.push(e); continue; }
     if (state.insideBuilding !== null && e.id === state.insideBuilding) {
       drawEntity(ctx, e); // draw behind everything else
       continue;
@@ -157,6 +160,7 @@ export function render(
   }
   drawList.sort((a, b) => a.pos.y - b.pos.y);
   for (const e of drawList) drawEntity(ctx, e);
+  for (const e of iconList) drawEntity(ctx, e);
 
   // Remote players
   for (const rp of remotePlayers.values()) {
@@ -281,6 +285,52 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity) {
       ctx.fillStyle = "rgba(255,240,200,0.9)";
       ctx.beginPath(); ctx.arc(x, y, r * 0.3, 0, Math.PI * 2); ctx.fill();
       ctx.globalAlpha = 1;
+      break;
+    }
+    case "trader": {
+      const isHealth = e.traderType === "health";
+      ctx.fillStyle = isHealth ? "#1a7acc" : "#1a4acc";
+      ctx.strokeStyle = isHealth ? "#66ccff" : "#6699ff";
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(x, y, e.radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 13px ui-monospace, monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(isHealth ? "+" : "⚙", x, y);
+      ctx.font = "10px ui-monospace, monospace";
+      ctx.fillStyle = "#cce8ff";
+      ctx.fillText(isHealth ? "Health" : "Guns & Ammo", x, y + e.radius + 12);
+      ctx.textAlign = "left";
+      ctx.textBaseline = "alphabetic";
+      break;
+    }
+    case "gambling": {
+      const gt = e.gamblingType;
+      const bgColor  = gt === "blackjack" ? "#1a5c2a" : gt === "roulette" ? "#8c1a1a" : "#7a5c1a";
+      const rimColor = gt === "blackjack" ? "#4dcc6e" : gt === "roulette" ? "#ff6666" : "#ffd966";
+      const symbol   = gt === "blackjack" ? "21"      : gt === "roulette" ? "◉"       : "777";
+      const label    = gt === "blackjack" ? "Blackjack" : gt === "roulette" ? "Roulette" : "Slots";
+      ctx.fillStyle = bgColor;
+      ctx.strokeStyle = rimColor;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(x, y, e.radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "#fff";
+      ctx.font = `bold ${gt === "blackjack" ? "11" : "13"}px ui-monospace, monospace`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(symbol, x, y);
+      ctx.font = "10px ui-monospace, monospace";
+      ctx.fillStyle = rimColor;
+      ctx.fillText(label, x, y + e.radius + 12);
+      ctx.textAlign = "left";
+      ctx.textBaseline = "alphabetic";
       break;
     }
     case "corpse": {
@@ -793,7 +843,7 @@ function drawHud(ctx: CanvasRenderingContext2D, state: GameState, viewW: number,
 
   // Stats panel — displayName, kills, money, coords, online
   ctx.fillStyle = hsl("--hud-bg", 0.85);
-  ctx.fillRect(viewW - 200, 16, 184, 100);
+  ctx.fillRect(viewW - 200, 16, 184, 114);
   ctx.fillStyle = hsl("--foreground");
   ctx.font = "bold 13px ui-sans-serif, system-ui";
   ctx.textBaseline = "top";
@@ -802,15 +852,49 @@ function drawHud(ctx: CanvasRenderingContext2D, state: GameState, viewW: number,
   ctx.fillStyle = hsl("--foreground");
   ctx.fillText(`Kills: ${state.kills}`, viewW - 188, 40);
   ctx.fillStyle = "rgba(250,200,80,0.95)";
-  ctx.fillText(`Caps: $${state.money}`, viewW - 188, 56);
+  ctx.fillText(`Banked: $${state.bankedMoney}`, viewW - 188, 56);
+  ctx.fillStyle = state.money > 0 ? "rgba(120,220,120,0.95)" : "rgba(120,120,120,0.5)";
+  ctx.fillText(`Carried: $${state.money}`, viewW - 188, 72);
   ctx.font = "11px ui-sans-serif, system-ui";
   ctx.fillStyle = hsl("--muted-foreground");
   ctx.fillText(
     `X ${Math.round(player.pos.x - SPAWN_POINT.x)}  Y ${Math.round(player.pos.y - SPAWN_POINT.y)}`,
-    viewW - 188, 74
+    viewW - 188, 90
   );
   ctx.fillStyle = onlineCount > 0 ? "rgba(100,220,100,0.9)" : "rgba(180,180,180,0.6)";
-  ctx.fillText(`● ${onlineCount + 1} online`, viewW - 188, 90);
+  ctx.fillText(`● ${onlineCount + 1} online`, viewW - 188, 104);
+
+  // Weapon slot HUD — bottom left
+  const slotW = 90, slotH = 52, slotGap = 6, slotX = 16, slotY = viewH - slotH - 16;
+  for (let si = 0; si < 2; si++) {
+    const sx = slotX + si * (slotW + slotGap);
+    const isActive = state.activeWeaponSlot === si;
+    const weapon = state.weaponSlots[si];
+    ctx.fillStyle = isActive ? "rgba(180,130,40,0.35)" : "rgba(0,0,0,0.45)";
+    ctx.strokeStyle = isActive ? "rgba(220,170,60,0.9)" : "rgba(100,100,100,0.5)";
+    ctx.lineWidth = isActive ? 2 : 1;
+    ctx.beginPath();
+    ctx.roundRect(sx, slotY, slotW, slotH, 4);
+    ctx.fill();
+    ctx.stroke();
+    ctx.font = `bold 10px ui-monospace, monospace`;
+    ctx.fillStyle = isActive ? "rgba(220,170,60,0.9)" : "rgba(160,160,160,0.7)";
+    ctx.textBaseline = "top";
+    ctx.fillText(`[${si + 1}]`, sx + 6, slotY + 5);
+    if (weapon) {
+      ctx.font = "20px ui-sans-serif, system-ui";
+      ctx.fillText(weapon.icon, sx + 30, slotY + 8);
+      ctx.font = `11px ui-monospace, monospace`;
+      ctx.fillStyle = isActive ? "#fff" : "rgba(200,200,200,0.75)";
+      ctx.fillText(weapon.name, sx + 6, slotY + 34);
+    } else {
+      ctx.font = "11px ui-monospace, monospace";
+      ctx.fillStyle = "rgba(120,120,120,0.6)";
+      ctx.textBaseline = "middle";
+      ctx.fillText("empty", sx + slotW / 2 - 18, slotY + slotH / 2);
+      ctx.textBaseline = "top";
+    }
+  }
 
   // Minimap
   const mmSize = 180;
@@ -875,6 +959,8 @@ function drawHud(ctx: CanvasRenderingContext2D, state: GameState, viewW: number,
     else if (e.kind === "cow")          { col = hsl("--cow");    r = 2;   }
     else if (e.kind === "ruin")         { col = "#7a5535";       r = 4;   }
     else if (e.kind === "car")          { col = "#6b3a1a";       r = 3;   }
+    else if (e.kind === "trader")       { col = "#1a7acc";       r = 3.5; }
+    else if (e.kind === "gambling")     { col = "#ffd966";       r = 3.5; }
     if (col) {
       ctx.fillStyle = col;
       ctx.fillRect(ex - r / 2, ey - r / 2, r, r);
@@ -1036,6 +1122,18 @@ function drawHud(ctx: CanvasRenderingContext2D, state: GameState, viewW: number,
     ctx.fillStyle = hsl("--foreground");
     ctx.font = "16px ui-sans-serif, system-ui";
     ctx.fillText("Press R to respawn", viewW / 2, viewH / 2 + 30);
+    ctx.textAlign = "left";
+  }
+
+  // "Cash banked!" notification
+  if (state.bankNotify > 0) {
+    const alpha = Math.min(1, state.bankNotify);
+    ctx.globalAlpha = alpha;
+    ctx.font = "bold 22px ui-monospace, monospace";
+    ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(120,255,120,1)";
+    ctx.fillText("💰 Cash banked!", viewW / 2, viewH / 2 - 60);
+    ctx.globalAlpha = 1;
     ctx.textAlign = "left";
   }
 }

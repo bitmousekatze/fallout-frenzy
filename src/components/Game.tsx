@@ -1,12 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
-import { AvatarKind, InputState, InventoryItem, RemotePlayer } from "@/game/types";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { AvatarKind, InputState, InventoryItem, RemotePlayer, WeaponItem, ArmorItem, WEAPONS, ARMORS } from "@/game/types";
 import { GameState, updateGame } from "@/game/update";
 import { render } from "@/game/render";
 import { generateWorld, makeGrenade } from "@/game/world";
 import MobileControls from "./MobileControls";
 import { randomUUID } from "@/lib/uuid";
-import { type Account, updateAccount } from "@/lib/accounts";
+import { type Account, updateAccount, getAccount } from "@/lib/accounts";
+
+function resolveSession(routerState: { account?: Account | null; avatar?: AvatarKind } | null): { account: Account | null; avatar: AvatarKind } {
+  if (routerState?.account) return { account: routerState.account, avatar: routerState.avatar ?? "cat" };
+  try {
+    const raw = localStorage.getItem("ff-session");
+    if (!raw) return { account: null, avatar: "cat" };
+    const { username, avatar } = JSON.parse(raw) as { username: string; avatar: AvatarKind };
+    return { account: getAccount(username), avatar: avatar ?? "cat" };
+  } catch {
+    return { account: null, avatar: "cat" };
+  }
+}
 
 const WS_URL = import.meta.env.VITE_WS_URL ?? "ws://localhost:3001";
 
@@ -14,14 +26,19 @@ const isTouchDevice = () => navigator.maxTouchPoints > 0 && window.matchMedia("(
 
 export default function Game() {
   const location = useLocation();
-  const { account = null, avatar = "cat" as AvatarKind } = (location.state ?? {}) as { account: Account | null; avatar: AvatarKind };
+  const navigate = useNavigate();
+  const { account, avatar } = resolveSession(location.state as { account?: Account | null; avatar?: AvatarKind } | null);
   const name = account?.displayName ?? "Unknown";
   const accountRef = useRef<Account | null>(account);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [showHelp, setShowHelp] = useState(true);
   const [showInventory, setShowInventory] = useState(false);
+  const [showPause, setShowPause] = useState(false);
   const [inventoryDisplay, setInventoryDisplay] = useState<InventoryItem[]>([]);
+  const [weaponSlots, setWeaponSlots] = useState<[WeaponItem | null, WeaponItem | null]>([WEAPONS.pistol, null]);
+  const [armorSlot, setArmorSlot] = useState<ArmorItem | null>(null);
+  const [activeWeaponSlot, setActiveWeaponSlot] = useState<0 | 1>(0);
   const stateRef = useRef<GameState | null>(null);
   const [isMobile] = useState(() => isTouchDevice());
   const mobileInputRef = useRef({ dx: 0, dy: 0, shoot: false, aimScreenX: 0, aimScreenY: 0 });
@@ -87,7 +104,9 @@ export default function Game() {
       player: init.player,
       fireCooldown: 0,
       kills: 0,
-      money: account?.money ?? 0,
+      money: 0,
+      bankedMoney: account?.money ?? 0,
+      bankNotify: 0,
       displayName: account?.displayName ?? "Survivor",
       shake: 0,
       inventory: [],
@@ -99,6 +118,9 @@ export default function Game() {
       showLargeMap: false,
       loadedChunks: new Map(),
       discoveredRuinRegions: new Set(),
+      weaponSlots: [WEAPONS.pistol, null],
+      activeWeaponSlot: 0,
+      armorSlot: null,
     };
     stateRef.current = state;
 
@@ -113,14 +135,30 @@ export default function Game() {
     };
     const mouseScreen = { x: 0, y: 0 };
 
+    let paused = false;
+
     const onKey = (down: boolean) => (e: KeyboardEvent) => {
       const k = e.key.toLowerCase();
+      if (e.key === "Escape") {
+        if (down) {
+          e.preventDefault();
+          paused = !paused;
+          setShowPause(paused);
+          if (paused) setShowHelp(false);
+        }
+        return;
+      }
       if (k === "tab") {
         if (down) {
           e.preventDefault();
           setShowInventory((prev) => {
             const next = !prev;
-            if (next) setInventoryDisplay([...state.inventory]);
+            if (next) {
+              setInventoryDisplay([...state.inventory]);
+              setWeaponSlots([...state.weaponSlots] as [WeaponItem | null, WeaponItem | null]);
+              setArmorSlot(state.armorSlot);
+              setActiveWeaponSlot(state.activeWeaponSlot);
+            }
             return next;
           });
         }
@@ -132,6 +170,14 @@ export default function Game() {
       else if (k === "d" || k === "arrowright") input.right = down;
       else if (k === " ") { e.preventDefault(); input.shoot = down; }
       else if (e.key === "Shift") input.sprint = down;
+      else if (down && k === "1") {
+        state.activeWeaponSlot = 0;
+        setActiveWeaponSlot(0);
+      }
+      else if (down && k === "2") {
+        state.activeWeaponSlot = 1;
+        setActiveWeaponSlot(1);
+      }
       else if (down && k === "3" && state.player.hp > 0) {
         state.entities.push(makeGrenade({ ...state.player.pos }, { ...input.mouseWorld }));
       }
@@ -147,7 +193,9 @@ export default function Game() {
           player: fresh.player,
           fireCooldown: 0,
           kills: 0,
-          money: state.money,
+          money: 0,
+          bankedMoney: state.bankedMoney,
+          bankNotify: 0,
           displayName: state.displayName,
           shake: 0,
           inventory: [],
@@ -159,10 +207,16 @@ export default function Game() {
           showLargeMap: false,
           loadedChunks: new Map(),
           discoveredRuinRegions: new Set(),
+          weaponSlots: [WEAPONS.pistol, null],
+          activeWeaponSlot: 0,
+          armorSlot: null,
         };
         stateRef.current = state;
         setShowInventory(false);
         setInventoryDisplay([]);
+        setWeaponSlots([WEAPONS.pistol, null]);
+        setActiveWeaponSlot(0);
+        setArmorSlot(null);
       }
       if (down) setShowHelp(false);
     };
@@ -213,19 +267,17 @@ export default function Game() {
         input.mouseWorld.y = state.player.pos.y + (mouseScreen.y - h / 2);
       }
 
-      updateGame(state, input, dt);
+      if (!paused) updateGame(state, input, dt);
 
-      // Persist kills + money to account on each new kill
-      if (state.kills > prevKillsRef.current) {
+      // Persist kills + bankedMoney whenever banking happens (bankNotify just turned on)
+      if (accountRef.current && state.bankedMoney !== accountRef.current.money) {
+        accountRef.current = {
+          ...accountRef.current,
+          kills: accountRef.current.kills + state.kills - prevKillsRef.current,
+          money: state.bankedMoney,
+        };
         prevKillsRef.current = state.kills;
-        if (accountRef.current) {
-          accountRef.current = {
-            ...accountRef.current,
-            kills: (account?.kills ?? 0) + state.kills,
-            money: state.money,
-          };
-          updateAccount(accountRef.current);
-        }
+        updateAccount(accountRef.current);
       }
 
       // Send input to authoritative server at ~20fps
@@ -275,6 +327,15 @@ export default function Game() {
   }, []);
   const onMobileShootEnd = useCallback(() => { mobileInputRef.current.shoot = false; }, []);
 
+  const saveAndExit = () => {
+    const s = stateRef.current;
+    if (s && accountRef.current) {
+      accountRef.current = { ...accountRef.current, money: s.bankedMoney };
+      updateAccount(accountRef.current);
+    }
+    navigate("/");
+  };
+
   const consumeFood = (food: InventoryItem["food"]) => {
     const s = stateRef.current;
     if (!s) return;
@@ -284,6 +345,22 @@ export default function Game() {
     if (slot.count === 0) s.inventory.splice(s.inventory.indexOf(slot), 1);
     s.player.hp = Math.min(s.player.maxHp, s.player.hp + 30);
     setInventoryDisplay([...s.inventory]);
+  };
+
+  const equipWeapon = (weapon: WeaponItem, slot: 0 | 1) => {
+    const s = stateRef.current;
+    if (!s) return;
+    s.weaponSlots[slot] = weapon;
+    s.activeWeaponSlot = slot;
+    setWeaponSlots([...s.weaponSlots] as [WeaponItem | null, WeaponItem | null]);
+    setActiveWeaponSlot(slot);
+  };
+
+  const equipArmor = (armor: ArmorItem) => {
+    const s = stateRef.current;
+    if (!s) return;
+    s.armorSlot = armor;
+    setArmorSlot(armor);
   };
 
   return (
@@ -305,27 +382,116 @@ export default function Game() {
       >
         Town Builder
       </Link>
-      {showInventory && (
-        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-md border border-border bg-card/95 px-8 py-6 font-mono text-card-foreground shadow-2xl backdrop-blur min-w-64">
-          <div className="mb-4 text-base font-bold tracking-wider text-primary text-center">INVENTORY</div>
-          {inventoryDisplay.length === 0 ? (
-            <p className="text-center text-sm text-muted-foreground">Empty</p>
-          ) : (
-            <div className="space-y-2">
-              {inventoryDisplay.map((item) => (
-                <button
-                  key={item.food}
-                  onClick={() => consumeFood(item.food)}
-                  className="flex w-full items-center justify-between rounded border border-border bg-background px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground transition-colors"
-                >
-                  <span className="capitalize">{item.food === "pork" ? "🥩 Pork" : "🥩 Beef"}</span>
-                  <span className="ml-4 text-muted-foreground">x{item.count}</span>
-                  <span className="ml-4 text-xs text-green-400">+30 HP</span>
-                </button>
-              ))}
+      {showPause && (
+        <div className="pointer-events-auto absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="w-72 rounded-lg border border-border bg-card/97 p-8 font-mono text-card-foreground shadow-2xl text-center">
+            <div className="mb-1 text-2xl font-bold tracking-widest text-primary">PAUSED</div>
+            <div className="mb-6 text-xs text-muted-foreground">ESC to resume</div>
+            <div className="space-y-3">
+              <button
+                onClick={() => { setShowPause(false); }}
+                className="w-full rounded border border-border bg-background px-4 py-2 text-sm hover:bg-accent hover:text-accent-foreground transition-colors"
+              >
+                Resume
+              </button>
+              <button
+                onClick={saveAndExit}
+                className="w-full rounded border border-primary bg-primary/10 px-4 py-2 text-sm text-primary hover:bg-primary hover:text-primary-foreground transition-colors"
+              >
+                Save &amp; Exit to Lobby
+              </button>
             </div>
-          )}
-          <p className="mt-4 text-center text-xs text-muted-foreground">{isMobile ? "🎒 button to close · tap food to eat" : "TAB to close · click food to eat"}</p>
+          </div>
+        </div>
+      )}
+      {showInventory && (
+        <div className="pointer-events-auto absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[520px] max-w-[96vw] rounded-lg border border-border bg-card/97 p-5 font-mono text-card-foreground shadow-2xl backdrop-blur">
+          <div className="mb-4 text-sm font-bold tracking-widest text-primary text-center uppercase">Inventory</div>
+
+          {/* Equipment row */}
+          <div className="grid grid-cols-3 gap-3 mb-5">
+            {/* Weapon slot 1 */}
+            {([0, 1] as const).map((slotIdx) => {
+              const w = weaponSlots[slotIdx];
+              const isActive = activeWeaponSlot === slotIdx;
+              return (
+                <div key={slotIdx} className={`rounded border p-2 text-xs ${isActive ? "border-primary bg-primary/10" : "border-border bg-background/60"}`}>
+                  <div className="text-muted-foreground mb-1 flex items-center justify-between">
+                    <span>WEAPON {slotIdx + 1}</span>
+                    <kbd className="rounded bg-muted px-1 text-[10px] text-muted-foreground">{slotIdx + 1}</kbd>
+                  </div>
+                  {w ? (
+                    <div>
+                      <div className="text-base">{w.icon} <span className="text-foreground">{w.name}</span></div>
+                      <div className="text-muted-foreground mt-0.5">DMG {w.damage} · {(1 / w.fireRate).toFixed(1)} rps</div>
+                    </div>
+                  ) : (
+                    <div className="text-muted-foreground italic">— empty —</div>
+                  )}
+                  {/* Swap weapon picker */}
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {(Object.values(WEAPONS) as WeaponItem[]).map((ww) => (
+                      <button
+                        key={ww.id}
+                        onClick={() => equipWeapon(ww, slotIdx)}
+                        className={`rounded border px-1.5 py-0.5 text-[10px] transition-colors ${w?.id === ww.id ? "border-primary bg-primary/20 text-primary" : "border-border hover:bg-accent hover:text-accent-foreground"}`}
+                      >
+                        {ww.icon} {ww.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* Armor slot */}
+            <div className="rounded border border-border bg-background/60 p-2 text-xs">
+              <div className="text-muted-foreground mb-1">ARMOR</div>
+              {armorSlot ? (
+                <div>
+                  <div className="text-base">{armorSlot.icon} <span className="text-foreground">{armorSlot.name}</span></div>
+                  <div className="text-muted-foreground mt-0.5">-{armorSlot.defense}% dmg</div>
+                </div>
+              ) : (
+                <div className="text-muted-foreground italic">— none —</div>
+              )}
+              <div className="mt-2 flex flex-wrap gap-1">
+                {(Object.values(ARMORS) as ArmorItem[]).map((a) => (
+                  <button
+                    key={a.id}
+                    onClick={() => equipArmor(a)}
+                    className={`rounded border px-1.5 py-0.5 text-[10px] transition-colors ${armorSlot?.id === a.id ? "border-primary bg-primary/20 text-primary" : "border-border hover:bg-accent hover:text-accent-foreground"}`}
+                  >
+                    {a.icon} {a.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Food / consumables */}
+          <div className="rounded border border-border bg-background/40 p-3">
+            <div className="text-xs text-muted-foreground mb-2 tracking-wider">FOOD &amp; CONSUMABLES</div>
+            {inventoryDisplay.length === 0 ? (
+              <p className="text-center text-xs text-muted-foreground">No food</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {inventoryDisplay.map((item) => (
+                  <button
+                    key={item.food}
+                    onClick={() => consumeFood(item.food)}
+                    className="flex items-center gap-1.5 rounded border border-border bg-background px-2.5 py-1.5 text-xs hover:bg-accent hover:text-accent-foreground transition-colors"
+                  >
+                    <span>🥩 {item.food === "pork" ? "Pork" : "Beef"}</span>
+                    <span className="text-muted-foreground">×{item.count}</span>
+                    <span className="text-green-400">+30 HP</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <p className="mt-3 text-center text-[10px] text-muted-foreground">{isMobile ? "🎒 to close · tap food to eat" : "TAB to close · 1/2 swap weapon · click food to eat"}</p>
         </div>
       )}
       {showHelp && !showInventory && (
@@ -342,6 +508,7 @@ export default function Game() {
               <div><span className="text-foreground">Shift</span> sprint</div>
               <div><span className="text-foreground">Mouse</span> aim</div>
               <div><span className="text-foreground">Left click</span> shoot</div>
+              <div><span className="text-foreground">1 / 2</span> swap weapon</div>
               <div><span className="text-foreground">3</span> throw grenade</div>
               <div><span className="text-foreground">M</span> map</div>
               <div><span className="text-foreground">TAB</span> inventory</div>

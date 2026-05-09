@@ -1,6 +1,6 @@
 export type Vec2 = { x: number; y: number };
 
-export type EntityKind = "player" | "zombie" | "pig" | "cow" | "tree" | "rock" | "bullet" | "corpse" | "ruin" | "car" | "grenade" | "explosion" | "doggo";
+export type EntityKind = "player" | "zombie" | "pig" | "cow" | "tree" | "rock" | "bullet" | "corpse" | "ruin" | "car" | "grenade" | "explosion" | "doggo" | "trader" | "gambling";
 
 export interface RuinArea {
   cx: number;
@@ -63,6 +63,10 @@ export interface Entity {
   throwTarget?: Vec2;
   // avatar choice (player only)
   avatar?: AvatarKind;
+  // trader NPC type
+  traderType?: "health" | "guns";
+  // gambling hall game type
+  gamblingType?: "blackjack" | "roulette" | "slots";
 }
 
 export interface TownBuilding {
@@ -103,6 +107,37 @@ export interface InventoryItem {
   food: FoodType;
   count: number;
 }
+
+export type WeaponId = "pistol" | "rifle" | "shotgun";
+export type ArmorId = "leather" | "metal" | "hazmat";
+
+export interface WeaponItem {
+  id: WeaponId;
+  name: string;
+  damage: number;
+  fireRate: number; // seconds between shots
+  spread: number;
+  icon: string;
+}
+
+export interface ArmorItem {
+  id: ArmorId;
+  name: string;
+  defense: number; // flat damage reduction %
+  icon: string;
+}
+
+export const WEAPONS: Record<WeaponId, WeaponItem> = {
+  pistol:  { id: "pistol",  name: "Pistol",    damage: 25, fireRate: 0.12, spread: 0.04, icon: "🔫" },
+  rifle:   { id: "rifle",   name: "Rifle",      damage: 40, fireRate: 0.22, spread: 0.02, icon: "🎯" },
+  shotgun: { id: "shotgun", name: "Shotgun",    damage: 18, fireRate: 0.55, spread: 0.25, icon: "💥" },
+};
+
+export const ARMORS: Record<ArmorId, ArmorItem> = {
+  leather: { id: "leather", name: "Leather",   defense: 10, icon: "🧥" },
+  metal:   { id: "metal",   name: "Metal",      defense: 25, icon: "🛡️" },
+  hazmat:  { id: "hazmat",  name: "Hazmat",     defense: 15, icon: "☢️" },
+};
 
 export interface InputState {
   up: boolean;

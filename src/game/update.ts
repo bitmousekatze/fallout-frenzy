@@ -1,4 +1,4 @@
-import { ChunkData, Entity, InputState, InventoryItem, Road, RuinArea } from "./types";
+import { ChunkData, Entity, InputState, InventoryItem, Road, RuinArea, WeaponItem, ArmorItem, WEAPONS } from "./types";
 import {
   SPAWN_POINT, SPAWN_SAFE_RADIUS, WORLD_SIZE,
   CHUNK_SIZE, LOAD_RADIUS, UNLOAD_RADIUS,
@@ -64,6 +64,11 @@ export interface GameState {
   showLargeMap: boolean;
   loadedChunks: Map<string, ChunkData>;
   discoveredRuinRegions: Set<string>;
+  weaponSlots: [WeaponItem | null, WeaponItem | null]; // slot 1 and slot 2
+  activeWeaponSlot: 0 | 1;
+  armorSlot: ArmorItem | null;
+  bankedMoney: number;       // persisted to account — only updated when player banks at spawn
+  bankNotify: number;        // timer for "Cash banked!" HUD flash
 }
 
 function resolveCollision(a: Entity, b: Entity) {
@@ -268,14 +273,26 @@ export function updateGame(state: GameState, input: InputState, dt: number) {
   state.insideBuilding = _inBuilding;
   player.radius = _inBuilding ? 16 : 20;
 
-  // Shooting
+  // Shooting — use active weapon stats
+  const activeWeapon = state.weaponSlots[state.activeWeaponSlot] ?? WEAPONS.pistol;
   state.fireCooldown = Math.max(0, state.fireCooldown - dt);
   if (input.shoot && state.fireCooldown <= 0 && player.hp > 0) {
-    state.fireCooldown = FIRE_RATE;
+    state.fireCooldown = activeWeapon.fireRate;
     const muzzleX = player.pos.x + Math.cos(player.angle) * (player.radius + 18);
     const muzzleY = player.pos.y + Math.sin(player.angle) * (player.radius + 18);
-    const spread = (Math.random() - 0.5) * 0.04;
-    state.entities.push(makeBullet({ x: muzzleX, y: muzzleY }, player.angle + spread, player.id));
+    if (activeWeapon.id === "shotgun") {
+      for (let i = 0; i < 5; i++) {
+        const s = (Math.random() - 0.5) * activeWeapon.spread;
+        const b = makeBullet({ x: muzzleX, y: muzzleY }, player.angle + s, player.id);
+        b.damage = activeWeapon.damage;
+        state.entities.push(b);
+      }
+    } else {
+      const spread = (Math.random() - 0.5) * activeWeapon.spread;
+      const b = makeBullet({ x: muzzleX, y: muzzleY }, player.angle + spread, player.id);
+      b.damage = activeWeapon.damage;
+      state.entities.push(b);
+    }
     player.muzzleFlash = 0.06;
     state.shake = Math.min(1, state.shake + 0.15);
   }
@@ -336,7 +353,8 @@ export function updateGame(state: GameState, input: InputState, dt: number) {
         e.pos.y += mvy;
         e.attackCooldown = (e.attackCooldown ?? 0) - dt;
         if (d < ZOMBIE_ATTACK_RANGE && (e.attackCooldown ?? 0) <= 0) {
-          player.hp = Math.max(0, player.hp - ZOMBIE_DAMAGE);
+          const reduction = state.armorSlot ? state.armorSlot.defense / 100 : 0;
+          player.hp = Math.max(0, player.hp - ZOMBIE_DAMAGE * (1 - reduction));
           e.attackCooldown = 0.8;
           state.shake = Math.min(1, state.shake + 0.3);
         }
@@ -437,7 +455,7 @@ export function updateGame(state: GameState, input: InputState, dt: number) {
       for (const t of state.entities) {
         if (t === e || t.hp <= 0) continue;
         if (t.kind === "player") continue; // player is immune
-        if (t.kind === "bullet" || t.kind === "corpse" || t.kind === "tree" || t.kind === "rock" || t.kind === "ruin" || t.kind === "car" || t.kind === "explosion") continue;
+        if (t.kind === "bullet" || t.kind === "corpse" || t.kind === "tree" || t.kind === "rock" || t.kind === "ruin" || t.kind === "car" || t.kind === "explosion" || t.kind === "trader" || t.kind === "gambling") continue;
         const d = dist(e.pos, t.pos);
         if (d < EXPLOSION_RADIUS + t.radius) {
           const dmg = EXPLOSION_DAMAGE * Math.max(0, 1 - d / EXPLOSION_RADIUS);
@@ -470,7 +488,7 @@ export function updateGame(state: GameState, input: InputState, dt: number) {
     if (b.kind !== "bullet" || b.hp <= 0) continue;
     for (const t of state.entities) {
       if (t.id === b.ownerId || t.hp <= 0) continue;
-      if (t.kind === "bullet" || t.kind === "corpse" || t.kind === "ruin") continue;
+      if (t.kind === "bullet" || t.kind === "corpse" || t.kind === "ruin" || t.kind === "trader" || t.kind === "gambling") continue;
       if (dist(b.pos, t.pos) < b.radius + t.radius) {
         if (t.kind === "tree" || t.kind === "rock" || t.kind === "car") {
           b.hp = 0;
@@ -534,6 +552,14 @@ export function updateGame(state: GameState, input: InputState, dt: number) {
       e.fadeTtl = (e.fadeTtl ?? 0) - dt;
     }
   }
+
+  // Auto-bank carried cash when player returns to spawn safe zone
+  if (player.hp > 0 && state.money > 0 && dist(player.pos, SPAWN_POINT) < SPAWN_SAFE_RADIUS) {
+    state.bankedMoney += state.money;
+    state.money = 0;
+    state.bankNotify = 3;
+  }
+  if (state.bankNotify > 0) state.bankNotify -= dt;
 
   // Ruin zombie respawns — only when cleared, every 10s
   if (player.hp > 0) {

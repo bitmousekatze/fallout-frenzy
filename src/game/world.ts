@@ -249,6 +249,34 @@ export function makeDoggo(): Entity {
   };
 }
 
+export function makeTrader(pos: Vec2, traderType: "health" | "guns"): Entity {
+  return {
+    id: nextId(),
+    kind: "trader",
+    pos: { ...pos },
+    vel: { x: 0, y: 0 },
+    radius: 18,
+    angle: 0,
+    hp: 9999,
+    maxHp: 9999,
+    traderType,
+  };
+}
+
+export function makeGambling(pos: Vec2, gamblingType: "blackjack" | "roulette" | "slots"): Entity {
+  return {
+    id: nextId(),
+    kind: "gambling",
+    pos: { ...pos },
+    vel: { x: 0, y: 0 },
+    radius: 18,
+    angle: 0,
+    hp: 9999,
+    maxHp: 9999,
+    gamblingType,
+  };
+}
+
 export function makeDerelictCar(pos: Vec2, variant: number): Entity {
   return {
     id: nextId(),
@@ -627,6 +655,16 @@ export function generateWorld() {
       gaps: [],
     });
   }
+
+  // Traders at spawn town
+  entities.push(makeTrader({ x: sx + 200, y: sy - 171 }, "health"));
+  entities.push(makeTrader({ x: sx + 548, y: sy - 155 }, "guns"));
+
+  // Gambling hall at spawn town
+  entities.push(makeGambling({ x: sx + 463, y: sy + 239 }, "blackjack"));
+  entities.push(makeGambling({ x: sx + 463, y: sy + 327 }, "roulette"));
+  entities.push(makeGambling({ x: sx + 243, y: sy + 327 }, "slots"));
+  entities.push(makeGambling({ x: sx + 243, y: sy + 243 }, "slots"));
 
   // ruinAreas starts empty — chunks populate it as the player explores
   return { entities, player, ruinAreas: [] as RuinArea[], roads };

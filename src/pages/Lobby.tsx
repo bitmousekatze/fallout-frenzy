@@ -39,6 +39,7 @@ export default function Lobby() {
 
   const play = () => {
     if (!account) return;
+    localStorage.setItem("ff-session", JSON.stringify({ username: account.username, avatar }));
     navigate("/play", { state: { account, avatar } });
   };
 
@@ -60,7 +61,7 @@ export default function Lobby() {
               </div>
               <div>
                 <div className="text-2xl font-bold tabular-nums text-yellow-400">${account.money.toLocaleString()}</div>
-                <div>CAPS</div>
+                <div>Cash</div>
               </div>
             </div>
           </div>
