@@ -1,4 +1,5 @@
 import { ChunkData, Entity, InputState, InventoryItem, Road, RuinArea, WeaponItem, ArmorItem, WEAPONS } from "./types";
+import { tickAchievements } from "./achievements";
 import {
   SPAWN_POINT, SPAWN_SAFE_RADIUS, WORLD_SIZE,
   CHUNK_SIZE, LOAD_RADIUS, UNLOAD_RADIUS,
@@ -609,6 +610,14 @@ export function updateGame(state: GameState, input: InputState, dt: number) {
       if (pos) state.entities.push(makeZombie(pos));
     }
   }
+
+  tickAchievements({
+    entities: state.entities,
+    playerPos: player.pos,
+    kills: state.kills,
+    money: state.money,
+    bankedMoney: state.bankedMoney,
+  }, dt);
 
   // Cleanup
   state.entities = state.entities.filter((e) => {
