@@ -1,21 +1,44 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { AvatarKind } from "@/game/types";
-import { loginAccount, createAccount, type Account } from "@/lib/accounts";
+import { loginAccount, createAccount, getAccount, type Account } from "@/lib/accounts";
 import catFront from "@/assets/player/front1.png";
 import doggoFront from "@/assets/doggo/FrontWalk1.png";
 
 type Mode = "login" | "register";
 
+// Restore a previously-saved session so quitting a match returns the player to
+// the logged-in menu instead of the login form.
+function restoreSession(): { account: Account | null; avatar: AvatarKind } {
+  try {
+    const raw = localStorage.getItem("ff-session");
+    if (!raw) return { account: null, avatar: "cat" };
+    const { username, avatar } = JSON.parse(raw) as { username: string; avatar: AvatarKind };
+    return { account: getAccount(username), avatar: avatar ?? "cat" };
+  } catch {
+    return { account: null, avatar: "cat" };
+  }
+}
+
 export default function Lobby() {
   const navigate = useNavigate();
+  const restored = restoreSession();
   const [mode, setMode] = useState<Mode>("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
-  const [avatar, setAvatar] = useState<AvatarKind>("cat");
+  const [avatar, setAvatar] = useState<AvatarKind>(restored.avatar);
   const [error, setError] = useState("");
-  const [account, setAccount] = useState<Account | null>(null);
+  const [account, setAccount] = useState<Account | null>(restored.account);
+  const [showOptions, setShowOptions] = useState(false);
+
+  const logout = () => {
+    localStorage.removeItem("ff-session");
+    setAccount(null);
+    setShowOptions(false);
+    setUsername("");
+    setPassword("");
+  };
 
   const switchMode = (m: Mode) => {
     setMode(m);
@@ -100,12 +123,69 @@ export default function Lobby() {
             ENTER WASTELAND
           </button>
           <button
-            onClick={() => setAccount(null)}
-            className="w-full text-xs text-muted-foreground hover:text-foreground transition-colors"
+            onClick={() => setShowOptions(true)}
+            className="w-full rounded border border-border bg-background py-2 text-xs font-bold tracking-widest text-muted-foreground transition-colors hover:text-foreground hover:border-primary/40"
           >
-            switch account
+            ⚙ OPTIONS
+          </button>
+          <button
+            onClick={logout}
+            className="w-full text-xs text-muted-foreground hover:text-accent transition-colors"
+          >
+            log out
           </button>
         </div>
+
+        {showOptions && (
+          <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/60 p-4" onClick={() => setShowOptions(false)}>
+            <div
+              className="w-full max-w-md rounded-lg border border-border bg-card p-6 font-mono shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mb-4 flex items-center justify-between">
+                <div className="text-sm font-bold tracking-widest text-primary">OPTIONS</div>
+                <button onClick={() => setShowOptions(false)} className="text-xs text-muted-foreground hover:text-foreground">✕</button>
+              </div>
+
+              <div className="space-y-4 text-xs">
+                <div>
+                  <div className="mb-2 tracking-wider text-muted-foreground">KEYBOARD &amp; MOUSE</div>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-muted-foreground">
+                    <span className="text-foreground">WASD</span><span>Move</span>
+                    <span className="text-foreground">Shift</span><span>Sprint (toggle)</span>
+                    <span className="text-foreground">Mouse</span><span>Aim</span>
+                    <span className="text-foreground">Left click / Space</span><span>Shoot</span>
+                    <span className="text-foreground">Right click</span><span>Aim-lock (slow)</span>
+                    <span className="text-foreground">1 / 2</span><span>Swap weapon</span>
+                    <span className="text-foreground">3</span><span>Grenade</span>
+                    <span className="text-foreground">E</span><span>Shop / casino</span>
+                    <span className="text-foreground">M</span><span>Map cycle</span>
+                    <span className="text-foreground">TAB</span><span>Inventory</span>
+                    <span className="text-foreground">Esc</span><span>Pause</span>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="mb-2 tracking-wider text-muted-foreground">🎮 CONTROLLER</div>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-muted-foreground">
+                    <span className="text-foreground">Left stick</span><span>Move</span>
+                    <span className="text-foreground">Right stick</span><span>Aim</span>
+                    <span className="text-foreground">RT / RB / A</span><span>Shoot</span>
+                    <span className="text-foreground">LT</span><span>Aim-lock (slow)</span>
+                    <span className="text-foreground">L3</span><span>Sprint toggle</span>
+                    <span className="text-foreground">X</span><span>Grenade (hold LT)</span>
+                    <span className="text-foreground">LB / B</span><span>Weapon 1 / 2</span>
+                    <span className="text-foreground">Y</span><span>Shop / casino</span>
+                    <span className="text-foreground">−</span><span>Map</span>
+                    <span className="text-foreground">+</span><span>Pause</span>
+                  </div>
+                </div>
+
+                <p className="text-[10px] text-muted-foreground/70">Custom key rebinding is coming soon.</p>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }

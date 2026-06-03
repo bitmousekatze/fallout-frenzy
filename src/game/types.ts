@@ -117,6 +117,7 @@ export interface WeaponItem {
   damage: number;
   fireRate: number; // seconds between shots
   spread: number;
+  magSize: number;  // rounds per magazine before reload
   icon: string;
 }
 
@@ -128,10 +129,75 @@ export interface ArmorItem {
 }
 
 export const WEAPONS: Record<WeaponId, WeaponItem> = {
-  pistol:  { id: "pistol",  name: "Pistol",    damage: 25, fireRate: 0.12, spread: 0.04, icon: "🔫" },
-  rifle:   { id: "rifle",   name: "Rifle",      damage: 40, fireRate: 0.22, spread: 0.02, icon: "🎯" },
-  shotgun: { id: "shotgun", name: "Shotgun",    damage: 18, fireRate: 0.55, spread: 0.25, icon: "💥" },
+  pistol:  { id: "pistol",  name: "Pistol",    damage: 25, fireRate: 0.12, spread: 0.04, magSize: 12, icon: "🔫" },
+  rifle:   { id: "rifle",   name: "Rifle",      damage: 40, fireRate: 0.22, spread: 0.02, magSize: 20, icon: "🎯" },
+  shotgun: { id: "shotgun", name: "Shotgun",    damage: 18, fireRate: 0.55, spread: 0.25, magSize: 6,  icon: "💥" },
 };
+
+// ---- Consumable health items (bought at the medic, used from inventory) ----
+export type ConsumableId = "bandage" | "medkit" | "stimpak";
+
+export interface ConsumableDef {
+  id: ConsumableId;
+  name: string;
+  heal: number;   // HP restored when used (large = full heal)
+  price: number;  // cost in caps
+  icon: string;
+}
+
+export const CONSUMABLES: Record<ConsumableId, ConsumableDef> = {
+  bandage: { id: "bandage", name: "Bandage", heal: 25,   price: 8,  icon: "🩹" },
+  medkit:  { id: "medkit",  name: "Medkit",  heal: 60,   price: 20, icon: "🧰" },
+  stimpak: { id: "stimpak", name: "Stimpak", heal: 9999, price: 45, icon: "💉" },
+};
+
+export interface ConsumableItem {
+  id: ConsumableId;
+  count: number;
+}
+
+// ---- Weapon upgrades (bought at the gunsmith) ----
+export type WeaponUpgrades = Record<WeaponId, { damageLevel: number; magLevel: number }>;
+
+export const DAMAGE_PER_LEVEL = 8;   // +damage per upgrade level
+export const MAG_PER_LEVEL = 6;      // +mag capacity per upgrade level
+export const MAX_UPGRADE_LEVEL = 5;
+
+export function freshUpgrades(): WeaponUpgrades {
+  return {
+    pistol:  { damageLevel: 0, magLevel: 0 },
+    rifle:   { damageLevel: 0, magLevel: 0 },
+    shotgun: { damageLevel: 0, magLevel: 0 },
+  };
+}
+
+export function effectiveDamage(w: WeaponItem, up?: { damageLevel: number }): number {
+  return w.damage + (up?.damageLevel ?? 0) * DAMAGE_PER_LEVEL;
+}
+
+export function effectiveMag(w: WeaponItem, up?: { magLevel: number }): number {
+  return w.magSize + (up?.magLevel ?? 0) * MAG_PER_LEVEL;
+}
+
+// Cost to buy the NEXT level, given the current level.
+export function upgradeCost(base: number, currentLevel: number): number {
+  return base * (currentLevel + 1);
+}
+
+export const DAMAGE_UPGRADE_BASE = 30;
+export const MAG_UPGRADE_BASE = 25;
+
+// ---- Ammo (bought at the gunsmith, cheap) ----
+export interface AmmoPack {
+  rounds: number;
+  price: number;
+  label: string;
+}
+
+export const AMMO_PACKS: AmmoPack[] = [
+  { rounds: 50,  price: 10, label: "50 rounds" },
+  { rounds: 200, price: 35, label: "200 rounds" },
+];
 
 export const ARMORS: Record<ArmorId, ArmorItem> = {
   leather: { id: "leather", name: "Leather",   defense: 10, icon: "🧥" },
@@ -146,6 +212,7 @@ export interface InputState {
   right: boolean;
   shoot: boolean;
   sprint: boolean;
+  aim: boolean;        // hold-to-aim: move slower + auto-aim/lock onto nearest zombie
   mouseWorld: Vec2;
 }
 

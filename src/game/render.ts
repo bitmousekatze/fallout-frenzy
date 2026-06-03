@@ -162,6 +162,31 @@ export function render(
   for (const e of drawList) drawEntity(ctx, e);
   for (const e of iconList) drawEntity(ctx, e);
 
+  // Aim-assist target highlight — red reticle around the locked zombie
+  if (state.aimTargetId !== null) {
+    const tgt = state.entities.find((e) => e.id === state.aimTargetId && e.hp > 0);
+    if (tgt) {
+      const r = tgt.radius + 8;
+      ctx.save();
+      ctx.translate(tgt.pos.x, tgt.pos.y);
+      ctx.strokeStyle = "rgba(255,60,60,0.95)";
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.stroke();
+      // corner brackets
+      ctx.lineWidth = 3;
+      for (let q = 0; q < 4; q++) {
+        const a0 = q * (Math.PI / 2) + Math.PI / 4 - 0.35;
+        const a1 = a0 + 0.7;
+        ctx.beginPath();
+        ctx.arc(0, 0, r + 4, a0, a1);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }
+
   // Remote players
   for (const rp of remotePlayers.values()) {
     if (!inView(rp.x, rp.y, 40)) continue;
@@ -896,7 +921,23 @@ function drawHud(ctx: CanvasRenderingContext2D, state: GameState, viewW: number,
     }
   }
 
-  // Minimap
+  // Ammo readout — above the weapon slots: current mag / reserve
+  {
+    const activeWeapon = state.weaponSlots[state.activeWeaponSlot];
+    if (activeWeapon) {
+      const mag = state.mags[activeWeapon.id] ?? 0;
+      const reserve = state.ammo ?? 0;
+      ctx.font = "bold 13px ui-monospace, monospace";
+      ctx.textBaseline = "bottom";
+      const out = mag <= 0 && reserve <= 0;
+      ctx.fillStyle = out ? "rgba(220,80,60,0.95)" : "rgba(220,190,90,0.95)";
+      ctx.fillText(out ? "OUT OF AMMO" : `AMMO ${mag} / ${reserve}`, slotX, slotY - 6);
+      ctx.textBaseline = "top";
+    }
+  }
+
+  // Minimap — only shown in map mode 1 (M cycles hidden → minimap → fullscreen)
+  if (state.mapMode === 1) {
   const mmSize = 180;
   const mmX = viewW - mmSize - 16;
   const mmY = viewH - mmSize - 16;
@@ -1001,16 +1042,21 @@ function drawHud(ctx: CanvasRenderingContext2D, state: GameState, viewW: number,
     );
     ctx.textAlign = "left";
   }
+  } // end minimap (mapMode === 1)
 
-  // Large map overlay
-  if (state.showLargeMap) {
-    const LM = 600;
+  // Fullscreen map overlay — map mode 2
+  if (state.mapMode === 2) {
+    const LM = Math.min(viewW, viewH) - 32;
     const lmX = (viewW - LM) / 2;
     const lmY = (viewH - LM) / 2;
     const lmViewRange = 5000;
     const lmScale = LM / lmViewRange;
     const lmOriginX = player.pos.x - lmViewRange / 2;
     const lmOriginY = player.pos.y - lmViewRange / 2;
+
+    // Dim the whole screen behind the fullscreen map
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.fillRect(0, 0, viewW, viewH);
 
     ctx.save();
     ctx.beginPath();
@@ -1096,7 +1142,7 @@ function drawHud(ctx: CanvasRenderingContext2D, state: GameState, viewW: number,
     ctx.font = "bold 12px ui-monospace, monospace";
     ctx.textAlign = "center";
     ctx.textBaseline = "bottom";
-    ctx.fillText("[ MAP — M to close ]", viewW / 2, lmY - 4);
+    ctx.fillText("[ MAP — M or ESC to close ]", viewW / 2, lmY - 4);
     ctx.textAlign = "left";
   }
 

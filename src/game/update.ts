@@ -1,4 +1,4 @@
-import { ChunkData, Entity, InputState, InventoryItem, Road, RuinArea, WeaponItem, ArmorItem, WEAPONS } from "./types";
+import { ChunkData, Entity, InputState, InventoryItem, Road, RuinArea, WeaponItem, ArmorItem, WEAPONS, WeaponId, WeaponUpgrades, ConsumableItem, effectiveDamage, effectiveMag } from "./types";
 import { tickAchievements } from "./achievements";
 import {
   SPAWN_POINT, SPAWN_SAFE_RADIUS, WORLD_SIZE,
@@ -62,7 +62,7 @@ export interface GameState {
   ruinSpawnTimers: number[];   // countdown per ruin area
   globalSpawnTimer: number;
   insideBuilding: number | null; // entity id of building player is currently inside
-  showLargeMap: boolean;
+  mapMode: 0 | 1 | 2;   // 0 = hidden, 1 = minimap, 2 = fullscreen map
   loadedChunks: Map<string, ChunkData>;
   discoveredRuinRegions: Set<string>;
   weaponSlots: [WeaponItem | null, WeaponItem | null]; // slot 1 and slot 2
@@ -70,6 +70,14 @@ export interface GameState {
   armorSlot: ArmorItem | null;
   bankedMoney: number;       // persisted to account — only updated when player banks at spawn
   bankNotify: number;        // timer for "Cash banked!" HUD flash
+  // --- shops / economy ---
+  ammo: number;                            // reserve ammo pool (shared across weapons)
+  mags: Record<WeaponId, number>;          // rounds currently loaded in each weapon's mag
+  weaponUpgrades: WeaponUpgrades;          // per-weapon damage/mag upgrade levels
+  consumables: ConsumableItem[];           // bought health items, used from inventory
+  nearShop: "health" | "guns" | null;      // which trader the player is standing next to
+  nearGame: "blackjack" | "roulette" | "slots" | null; // which casino table is in reach
+  aimTargetId: number | null;              // zombie the player is auto-aim locked onto
 }
 
 function resolveCollision(a: Entity, b: Entity) {
@@ -241,10 +249,33 @@ export function updateGame(state: GameState, input: InputState, dt: number) {
       vx /= len;
       vy /= len;
     }
-    const speed = PLAYER_SPEED * (input.sprint ? 1.6 : 1);
+    const speed = PLAYER_SPEED * (input.aim ? 0.45 : input.sprint ? 1.6 : 1);
     player.pos.x += vx * speed * dt;
     player.pos.y += vy * speed * dt;
     player.angle = Math.atan2(input.mouseWorld.y - player.pos.y, input.mouseWorld.x - player.pos.x);
+
+    // Aim assist: while aiming, lock onto the zombie closest to the aim direction
+    state.aimTargetId = null;
+    if (input.aim) {
+      const aimAng = player.angle;
+      let best: Entity | null = null;
+      let bestScore = Infinity;
+      for (const e of state.entities) {
+        if (e.kind !== "zombie" || e.hp <= 0) continue;
+        const d = dist(player.pos, e.pos);
+        if (d > 850) continue;
+        const ang = Math.atan2(e.pos.y - player.pos.y, e.pos.x - player.pos.x);
+        let diff = Math.abs(aimAng - ang);
+        if (diff > Math.PI) diff = Math.PI * 2 - diff;
+        if (diff > 0.7) continue; // ~40° cone around where you're pointing
+        const score = diff * 220 + d * 0.25; // prefer on-target, then nearer
+        if (score < bestScore) { bestScore = score; best = e; }
+      }
+      if (best) {
+        player.angle = Math.atan2(best.pos.y - player.pos.y, best.pos.x - player.pos.x);
+        state.aimTargetId = best.id;
+      }
+    }
 
     // Animation: pick facing from movement; idle keeps last facing
     player.moving = len > 0;
@@ -274,28 +305,55 @@ export function updateGame(state: GameState, input: InputState, dt: number) {
   state.insideBuilding = _inBuilding;
   player.radius = _inBuilding ? 16 : 20;
 
-  // Shooting — use active weapon stats
+  // Shooting — use active weapon stats (with upgrades) + ammo/magazine system
   const activeWeapon = state.weaponSlots[state.activeWeaponSlot] ?? WEAPONS.pistol;
+  const wUpgrade = state.weaponUpgrades[activeWeapon.id];
+  const wDamage = effectiveDamage(activeWeapon, wUpgrade);
+  const wMagSize = effectiveMag(activeWeapon, wUpgrade);
   state.fireCooldown = Math.max(0, state.fireCooldown - dt);
   if (input.shoot && state.fireCooldown <= 0 && player.hp > 0) {
     state.fireCooldown = activeWeapon.fireRate;
-    const muzzleX = player.pos.x + Math.cos(player.angle) * (player.radius + 18);
-    const muzzleY = player.pos.y + Math.sin(player.angle) * (player.radius + 18);
-    if (activeWeapon.id === "shotgun") {
-      for (let i = 0; i < 5; i++) {
-        const s = (Math.random() - 0.5) * activeWeapon.spread;
-        const b = makeBullet({ x: muzzleX, y: muzzleY }, player.angle + s, player.id);
-        b.damage = activeWeapon.damage;
+    // Auto-reload from the reserve pool when the magazine runs dry
+    if ((state.mags[activeWeapon.id] ?? 0) <= 0 && state.ammo > 0) {
+      const load = Math.min(wMagSize, state.ammo);
+      state.ammo -= load;
+      state.mags[activeWeapon.id] = load;
+    }
+    if ((state.mags[activeWeapon.id] ?? 0) > 0) {
+      state.mags[activeWeapon.id] -= 1;
+      const muzzleX = player.pos.x + Math.cos(player.angle) * (player.radius + 18);
+      const muzzleY = player.pos.y + Math.sin(player.angle) * (player.radius + 18);
+      if (activeWeapon.id === "shotgun") {
+        for (let i = 0; i < 5; i++) {
+          const s = (Math.random() - 0.5) * activeWeapon.spread;
+          const b = makeBullet({ x: muzzleX, y: muzzleY }, player.angle + s, player.id);
+          b.damage = wDamage;
+          state.entities.push(b);
+        }
+      } else {
+        const spread = (Math.random() - 0.5) * activeWeapon.spread;
+        const b = makeBullet({ x: muzzleX, y: muzzleY }, player.angle + spread, player.id);
+        b.damage = wDamage;
         state.entities.push(b);
       }
-    } else {
-      const spread = (Math.random() - 0.5) * activeWeapon.spread;
-      const b = makeBullet({ x: muzzleX, y: muzzleY }, player.angle + spread, player.id);
-      b.damage = activeWeapon.damage;
-      state.entities.push(b);
+      player.muzzleFlash = 0.06;
+      state.shake = Math.min(1, state.shake + 0.15);
     }
-    player.muzzleFlash = 0.06;
-    state.shake = Math.min(1, state.shake + 0.15);
+    // else: out of ammo — dry fire (no shot)
+  }
+
+  // Detect which shop trader (if any) the player is standing next to
+  {
+    let near: "health" | "guns" | null = null;
+    let nearGame: "blackjack" | "roulette" | "slots" | null = null;
+    if (player.hp > 0) {
+      for (const e of state.entities) {
+        if (e.kind === "trader" && !near && dist(player.pos, e.pos) < 90) near = e.traderType ?? null;
+        else if (e.kind === "gambling" && !nearGame && dist(player.pos, e.pos) < 90) nearGame = e.gamblingType ?? null;
+      }
+    }
+    state.nearShop = near;
+    state.nearGame = nearGame;
   }
   if (player.muzzleFlash) {
     player.muzzleFlash -= dt;

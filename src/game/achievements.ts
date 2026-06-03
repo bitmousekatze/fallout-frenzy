@@ -43,6 +43,7 @@ const CASINO_TIME_TIERS: Array<[number, string]> = [
 ];
 
 const STATION_INTERACT_RADIUS = 90;
+const CASINO_DETECT_RADIUS = 250;
 
 let prevKills = 0;
 let totalCashEarned = 0;
@@ -80,7 +81,7 @@ export function tickAchievements(s: AchievementTickInput, dt: number) {
     if (e.kind === "trader" && dist(e.pos, s.playerPos) < STATION_INTERACT_RADIUS) {
       if (e.traderType === "health") unlock("use_health_station");
       else if (e.traderType === "guns") unlock("use_guns_ammo_station");
-    } else if (e.kind === "gambling" && dist(e.pos, s.playerPos) < STATION_INTERACT_RADIUS) {
+    } else if (e.kind === "gambling" && dist(e.pos, s.playerPos) < CASINO_DETECT_RADIUS) {
       inCasino = true;
     }
   }
