@@ -307,6 +307,7 @@ export function updateGame(state: GameState, input: InputState, dt: number) {
 
   // Shooting — use active weapon stats (with upgrades) + ammo/magazine system
   const activeWeapon = state.weaponSlots[state.activeWeaponSlot] ?? WEAPONS.pistol;
+  state.player.weaponId = activeWeapon.id; // so render can draw the right gun model
   const wUpgrade = state.weaponUpgrades[activeWeapon.id];
   const wDamage = effectiveDamage(activeWeapon, wUpgrade);
   const wMagSize = effectiveMag(activeWeapon, wUpgrade);
@@ -430,6 +431,11 @@ export function updateGame(state: GameState, input: InputState, dt: number) {
         e.pos.x += Math.cos(ang) * ZOMBIE_SPEED * 0.4 * dt;
         e.pos.y += Math.sin(ang) * ZOMBIE_SPEED * 0.4 * dt;
       }
+      // Sprite facing + walk animation derived from heading
+      const cx = Math.cos(e.angle), cy = Math.sin(e.angle);
+      e.facing = Math.abs(cx) > Math.abs(cy) ? (cx > 0 ? "right" : "left") : (cy > 0 ? "down" : "up");
+      e.moving = true;
+      e.animTime = (e.animTime ?? 0) + dt;
     }
 
 

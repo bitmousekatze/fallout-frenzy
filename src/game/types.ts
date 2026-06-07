@@ -63,6 +63,8 @@ export interface Entity {
   throwTarget?: Vec2;
   // avatar choice (player only)
   avatar?: AvatarKind;
+  // active weapon id (player only) — drives which gun model is drawn
+  weaponId?: WeaponId;
   // trader NPC type
   traderType?: "health" | "guns";
   // gambling hall game type

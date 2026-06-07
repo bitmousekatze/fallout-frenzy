@@ -16,6 +16,14 @@ import right1 from "@/assets/player/right1.png";
 import right2 from "@/assets/player/right2.png";
 import up1 from "@/assets/player/up1.png";
 import up2 from "@/assets/player/up2.png";
+import zFront1 from "@/assets/zombie/front1.png";
+import zFront2 from "@/assets/zombie/front2.png";
+import zBack1 from "@/assets/zombie/back1.png";
+import zBack2 from "@/assets/zombie/back2.png";
+import zLeft1 from "@/assets/zombie/left1.png";
+import zLeft2 from "@/assets/zombie/left2.png";
+import zRight1 from "@/assets/zombie/right1.png";
+import zRight2 from "@/assets/zombie/right2.png";
 
 export type Facing = "down" | "up" | "left" | "right" | "back";
 
@@ -40,4 +48,12 @@ export const doggoSprites: Record<"down" | "up" | "left" | "right", [HTMLImageEl
   up:    [load(doggoBack1),  load(doggoBack2)],
   left:  [load(doggoLeft1),  load(doggoLeft2)],
   right: [load(doggoRight1), load(doggoRight2)],
+};
+
+// Zombie walk cycles — 2 frames per direction, "down" = facing camera.
+export const zombieSprites: Record<"down" | "up" | "left" | "right", [HTMLImageElement, HTMLImageElement]> = {
+  down:  [load(zFront1), load(zFront2)],
+  up:    [load(zBack1),  load(zBack2)],
+  left:  [load(zLeft1),  load(zLeft2)],
+  right: [load(zRight1), load(zRight2)],
 };

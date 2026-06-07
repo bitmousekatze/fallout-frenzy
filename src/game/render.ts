@@ -1,7 +1,7 @@
-import { Entity, RemotePlayer, Road, WEAPONS } from "./types";
+import { Entity, RemotePlayer, Road, WEAPONS, WeaponId } from "./types";
 import { GameState } from "./update";
 import { SAFE_ZONE_HALF, SPAWN_POINT, TILE, WORLD_SIZE } from "./world";
-import { doggoSprites, playerSprites } from "./sprites";
+import { doggoSprites, playerSprites, zombieSprites } from "./sprites";
 
 // --- CSS variable cache: resolve once, never query the DOM again ---
 const _hslCache = new Map<string, string>();
@@ -264,8 +264,7 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity) {
     }
     case "doggo":  { drawDoggo(ctx, e); break; }
     case "zombie": {
-      const flash = e.hitFlash ? "#fff" : hsl("--zombie");
-      drawCharacter(ctx, e, flash);
+      drawZombieSprite(ctx, e);
       break;
     }
     case "pig":
@@ -384,14 +383,24 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity) {
   }
 }
 
+// Two-frame walk cycle index. Always returns 0 or 1 even if animTime is
+// undefined, negative, or NaN (e.g. a bad value arriving over the network from
+// a remote player) — otherwise frames[NaN] / frames[-1] is undefined and the
+// sprite draw crashes on img.complete.
+function spriteFrameIdx(e: Entity, rate: number): 0 | 1 {
+  const t = e.animTime;
+  if (typeof t !== "number" || !Number.isFinite(t)) return 0;
+  return (Math.floor(Math.abs(t) * rate) % 2) as 0 | 1;
+}
+
 function drawPlayerSprite(ctx: CanvasRenderingContext2D, e: Entity) {
   const { x, y } = e.pos;
   const facing = e.facing ?? "down";
-  const frames = playerSprites[facing];
-  const frameIdx = e.moving ? (Math.floor((e.animTime ?? 0) * 8) % 2) : 0;
+  const frames = playerSprites[facing] ?? playerSprites.down;
+  const frameIdx = e.moving ? spriteFrameIdx(e, 8) : 0;
   const img = frames[frameIdx];
   const size = e.radius * 2.6;
-  if (img.complete && img.naturalWidth > 0) {
+  if (img && img.complete && img.naturalWidth > 0) {
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(img, x - size / 2, y - size / 2 - 4, size, size);
   } else {
@@ -400,15 +409,61 @@ function drawPlayerSprite(ctx: CanvasRenderingContext2D, e: Entity) {
     ctx.arc(x, y, e.radius, 0, Math.PI * 2);
     ctx.fill();
   }
+  drawWeapon(ctx, e, e.weaponId ?? "pistol");
+}
+
+// Distinct top-down gun silhouettes, drawn pointing along +x (the aim angle).
+// Each returns the barrel-tip distance so the muzzle flash lands correctly.
+function drawWeapon(ctx: CanvasRenderingContext2D, e: Entity, weaponId: WeaponId) {
+  const { x, y } = e.pos;
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(e.angle);
-  ctx.fillStyle = "#1a1a1a";
-  ctx.fillRect(e.radius - 2, -3, 22, 6);
+  const base = e.radius - 2; // where the gun meets the hands
+  const metal = "#2b2b2f";
+  const dark = "#161618";
+  const wood = "#6b4a2b";
+  let barrelTip = base + 22;
+
+  if (weaponId === "rifle") {
+    // long thin barrel + magazine + shoulder stock + sight — reads "long gun"
+    ctx.fillStyle = wood;
+    ctx.fillRect(base - 8, -3.5, 12, 7);          // stock
+    ctx.fillStyle = metal;
+    ctx.fillRect(base, -2.5, 34, 5);              // long barrel
+    ctx.fillStyle = dark;
+    ctx.fillRect(base + 6, 2, 5, 9);              // magazine (drops down)
+    ctx.fillRect(base + 14, -5, 4, 3);            // front sight
+    barrelTip = base + 34;
+  } else if (weaponId === "shotgun") {
+    // short, fat double-barrel + pump — reads "stubby & heavy"
+    ctx.fillStyle = wood;
+    ctx.fillRect(base - 6, -4, 10, 8);            // stock
+    ctx.fillStyle = metal;
+    ctx.fillRect(base, -4, 22, 8);                // thick body
+    ctx.fillStyle = dark;
+    ctx.fillRect(base + 20, -4, 3, 8);            // muzzle cap (twin bore)
+    ctx.fillStyle = "#3a3a40";
+    ctx.fillRect(base + 8, 3.5, 8, 3);            // pump grip
+    barrelTip = base + 23;
+  } else {
+    // pistol — small, compact, with a visible grip angled down
+    ctx.fillStyle = dark;
+    ctx.fillRect(base - 3, 1, 5, 7);              // grip
+    ctx.fillStyle = metal;
+    ctx.fillRect(base, -2.5, 15, 5);              // slide/barrel
+    barrelTip = base + 15;
+  }
+
   if (e.muzzleFlash) {
-    ctx.fillStyle = "rgba(255,220,120,0.95)";
+    const r = weaponId === "shotgun" ? 11 : weaponId === "rifle" ? 7 : 6;
+    const g = ctx.createRadialGradient(barrelTip + 4, 0, 0, barrelTip + 4, 0, r + 4);
+    g.addColorStop(0, "rgba(255,255,210,0.98)");
+    g.addColorStop(0.5, "rgba(255,190,80,0.85)");
+    g.addColorStop(1, "rgba(255,120,30,0)");
+    ctx.fillStyle = g;
     ctx.beginPath();
-    ctx.arc(e.radius + 22, 0, 8, 0, Math.PI * 2);
+    ctx.arc(barrelTip + 4, 0, r + 4, 0, Math.PI * 2);
     ctx.fill();
   }
   ctx.restore();
@@ -420,10 +475,10 @@ function drawDoggo(ctx: CanvasRenderingContext2D, e: Entity) {
   const facing: "down" | "up" | "left" | "right" =
     f === "up" || f === "left" || f === "right" ? f : "down";
   const frames = doggoSprites[facing];
-  const frameIdx = Math.floor(Math.abs(e.animTime ?? 0) * 8) % 2;
+  const frameIdx = spriteFrameIdx(e, 8);
   const img = frames[frameIdx];
   const size = e.radius * 3.2;
-  if (img.complete && img.naturalWidth > 0) {
+  if (img && img.complete && img.naturalWidth > 0) {
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(img, x - size / 2, y - size / 2 - 4, size, size);
   } else {
@@ -432,18 +487,40 @@ function drawDoggo(ctx: CanvasRenderingContext2D, e: Entity) {
     ctx.arc(x, y, e.radius, 0, Math.PI * 2);
     ctx.fill();
   }
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(e.angle);
-  ctx.fillStyle = "#1a1a1a";
-  ctx.fillRect(e.radius - 2, -3, 22, 6);
-  if (e.muzzleFlash) {
-    ctx.fillStyle = "rgba(255,220,120,0.95)";
+  drawWeapon(ctx, e, e.weaponId ?? "pistol");
+}
+
+function drawZombieSprite(ctx: CanvasRenderingContext2D, e: Entity) {
+  const { x, y } = e.pos;
+  const f = e.facing;
+  const facing: "down" | "up" | "left" | "right" =
+    f === "up" || f === "left" || f === "right" ? f : "down";
+  const frames = zombieSprites[facing];
+  const frameIdx = spriteFrameIdx(e, 7);
+  const img = frames[frameIdx];
+  const size = e.radius * 2.8;
+  if (img && img.complete && img.naturalWidth > 0) {
+    // shadow grounds the sprite
+    ctx.fillStyle = "rgba(0,0,0,0.28)";
     ctx.beginPath();
-    ctx.arc(e.radius + 22, 0, 8, 0, Math.PI * 2);
+    ctx.ellipse(x, y + e.radius * 0.55, e.radius * 0.85, e.radius * 0.34, 0, 0, Math.PI * 2);
     ctx.fill();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(img, x - size / 2, y - size / 2 - 4, size, size);
+    // hit flash — quick white pulse over the body when shot
+    if (e.hitFlash) {
+      ctx.save();
+      ctx.globalAlpha = Math.min(0.7, e.hitFlash * 5);
+      ctx.fillStyle = "#fff";
+      ctx.beginPath();
+      ctx.arc(x, y, e.radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  } else {
+    // fallback to the old procedural blob until the image loads
+    drawCharacter(ctx, e, e.hitFlash ? "#fff" : hsl("--zombie"));
   }
-  ctx.restore();
 }
 
 function drawCharacter(ctx: CanvasRenderingContext2D, e: Entity, color: string) {
